@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NIF Viewer – Fallout New Vegas</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
+<style>
+:root{--bg:#14161a;--fg:#e6e2d3;--ac:#e0a526;--ac2:#f7cd63;--pn:#1d2026e6;--bd:#2c313a;--bd2:#3b4250;--mut:#98a0ad;--ok:#6fcf7f;--err:#e06c6c}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;overflow:hidden}
+canvas#cv{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+canvas#cv:active{cursor:grabbing}
+.mdi{line-height:1;font-size:18px;vertical-align:-3px}
+
+/* ---------- toolbar ---------- */
+.bar{position:fixed;top:12px;left:12px;right:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+  background:var(--pn);border:1px solid var(--bd);padding:7px 9px;border-radius:12px;z-index:3;
+  box-shadow:0 8px 24px #0008;backdrop-filter:blur(10px)}
+.brand{display:flex;align-items:center;gap:8px;padding:0 6px 0 2px;user-select:none}
+.brand>.mdi{font-size:24px;color:var(--ac)}
+.brand b{display:block;font-size:13px;letter-spacing:.4px;line-height:1.15}
+.brand small{display:block;font-size:10px;color:var(--mut);letter-spacing:.6px;text-transform:uppercase}
+.sep{width:1px;align-self:stretch;background:var(--bd2);margin:2px 4px}
+
+.btn,.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;border-radius:8px;
+  padding:6px 11px;font:600 12.5px system-ui,sans-serif;cursor:pointer;user-select:none;
+  transition:background .15s,color .15s,border-color .15s,transform .1s}
+.btn{background:var(--ac);color:#1a1405}
+.btn:hover{background:var(--ac2)}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:#ffffff0d;color:var(--fg);border-color:var(--bd2)}
+.btn.ghost:hover{background:#ffffff1a;border-color:#4a5262}
+.chip{background:#ffffff08;color:var(--mut);border-color:var(--bd2)}
+.chip:hover{background:#ffffff14;color:var(--fg)}
+.chip input{position:absolute;opacity:0;pointer-events:none}
+.chip .mdi{font-size:16px}
+.chip:has(input:checked){background:#e0a5261f;border-color:#e0a52666;color:var(--ac2)}
+.chip:has(input:focus-visible),.btn:focus-visible{outline:2px solid var(--ac2);outline-offset:2px}
+
+/* ---------- panels ---------- */
+.panel{position:fixed;background:var(--pn);border:1px solid var(--bd);border-radius:12px;z-index:2;
+  box-shadow:0 8px 24px #0008;backdrop-filter:blur(10px);overflow:hidden}
+.ph{display:flex;align-items:center;gap:6px;padding:7px 10px;font:600 11px system-ui,sans-serif;
+  letter-spacing:.8px;text-transform:uppercase;color:var(--mut);background:#ffffff06;border-bottom:1px solid var(--bd)}
+.ph>.mdi{font-size:15px;color:var(--ac)}
+.info-panel{left:12px;bottom:12px;max-width:min(560px,90vw)}
+#info{margin:0;padding:9px 11px;max-height:42vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:#d7d3c6}
+.uv-panel{right:12px;bottom:12px;display:none;flex-direction:column}
+#uvc{display:block;width:256px;height:256px;cursor:default;background:#222}
+.tex-panel{right:12px;top:70px;max-width:min(340px,86vw);max-height:40vh;display:none;flex-direction:column}
+#texl{list-style:none;margin:0;padding:6px;overflow:auto;font:12px/1.5 ui-monospace,monospace}
+#texl li{display:flex;gap:7px;align-items:center;padding:3px 7px;border-radius:6px;white-space:nowrap}
+#texl li.miss{background:#e06c6c1f;color:#f2a6a6}
+#texl .mdi{font-size:15px;flex:none}
+#texl .nm{overflow:hidden;text-overflow:ellipsis}
+#texl .k{margin-left:auto;padding-left:8px;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut)}
+#texl li.miss .k{color:#e06c6c}
+#texl .hint{padding:4px 7px 6px;color:var(--mut);white-space:normal;font:11px/1.45 system-ui,sans-serif}
+
+/* ---------- drop hint ---------- */
+#drop{position:fixed;inset:0;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;
+  pointer-events:none;text-align:center;color:var(--mut);z-index:1;transition:background .15s,color .15s}
+#drop>.mdi{font-size:72px;color:#e0a52655;transition:color .15s,transform .15s}
+#drop b{font-size:17px;color:var(--fg);font-weight:600}
+#drop small{font-size:12px;letter-spacing:.4px}
+#drop.h{display:none}
+#drop.over{background:#e0a5261a;color:var(--fg)}
+#drop.over>.mdi{color:var(--ac);transform:scale(1.08)}
+@media (max-width:640px){.brand small,.chip span,.btn span{display:none}.bar{gap:4px}}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<header class="bar">
+  <div class="brand"><i class="mdi mdi-cube-scan"></i><span><b>NIF Viewer</b><small>Fallout: New Vegas</small></span></div>
+  <div class="sep"></div>
+  <label class="btn" title="Open .nif and textures (O)"><i class="mdi mdi-folder-open-outline"></i><span>Open</span><input id="file" type="file" accept=".nif,.dds,.png,.jpg,.jpeg,.webp" multiple hidden></label>
+  <div class="sep"></div>
+  <label class="chip" title="Wireframe (W)"><input id="wire" type="checkbox" checked><i class="mdi mdi-vector-line"></i><span>Wireframe</span></label>
+  <label class="chip" title="Solid shading (S)"><input id="solid" type="checkbox" checked><i class="mdi mdi-cube-outline"></i><span>Solid</span></label>
+  <label class="chip" title="Textures (T)"><input id="tex" type="checkbox" checked><i class="mdi mdi-texture-box"></i><span>Textures</span></label>
+  <label class="chip" title="Normal maps (N)"><input id="nrm" type="checkbox" checked><i class="mdi mdi-circle-half-full"></i><span>Normal</span></label>
+  <label class="chip" title="Flip V coordinate (F)"><input id="flipv" type="checkbox"><i class="mdi mdi-flip-vertical"></i><span>Flip V</span></label>
+  <label class="chip" title="UV overlay (U)"><input id="uv" type="checkbox" checked><i class="mdi mdi-grid"></i><span>UV</span></label>
+  <div class="sep"></div>
+  <button class="btn ghost" id="reset" title="Reset camera (R)"><i class="mdi mdi-camera-retro"></i><span>Reset</span></button>
+</header>
+<aside class="panel info-panel">
+  <div class="ph"><i class="mdi mdi-information-outline"></i>Model info</div>
+  <pre id="info">No model loaded</pre>
+</aside>
+<aside class="panel uv-panel" id="uvp">
+  <div class="ph"><i class="mdi mdi-grid"></i>UV map</div>
+  <canvas id="uvc" width="256" height="256"></canvas>
+</aside>
+<aside class="panel tex-panel" id="texp">
+  <div class="ph"><i class="mdi mdi-texture-box"></i><span id="texh">Textures</span></div>
+  <ul id="texl"></ul>
+</aside>
+<div id="drop"><i class="mdi mdi-cube-outline"></i><b>Drag a .nif here</b><small>Add the .dds files too — diffuse and _n normal maps</small><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
+
+<script>
+// ---------- NIF parser (FNV: v20.2.0.7, user 11, BS 34) ----------
+function parseNif(buf) {
+  const dv = new DataView(buf); let o = 0;
+  const u8 = () => dv.getUint8(o++);
+  const u16 = () => { const v = dv.getUint16(o, true); o += 2; return v; };
+  const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
+  const i32 = () => { const v = dv.getInt32(o, true); o += 4; return v; };
+  const f32 = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
+  let line = ''; while (o < 200) { const c = u8(); if (c === 10) break; line += String.fromCharCode(c); }
+  if (!/Gamebryo|NetImmerse/.test(line)) throw new Error('Not a valid NIF file');
+  const ver = u32(); u8(); const uv = u32(); const nb = u32();
+  if (ver !== 0x14020007) throw new Error('Unsupported NIF version: 0x' + ver.toString(16) + ' (expected 20.2.0.7)');
+  if (uv >= 3) { const uv2 = u32(); if (uv2 > 34) throw new Error('BS stream ' + uv2 + ' (Skyrim/Fallout 4) not supported — Fallout 3 / New Vegas only'); for (let k = 0; k < 3; k++) { const sl = u8(); o += sl; } }
+  const nt = u16(), types = [];
+  for (let k = 0; k < nt; k++) { const l = u32(); types.push(String.fromCharCode(...new Uint8Array(buf, o, l))); o += l; }
+  const tix = []; for (let k = 0; k < nb; k++) tix.push(u16());
+  const sizes = []; for (let k = 0; k < nb; k++) sizes.push(u32());
+  const ns = u32(); u32(); const S = []; for (let k = 0; k < ns; k++) { const sl = u32(); S.push(String.fromCharCode(...new Uint8Array(buf, o, sl))); o += sl; }
+  const ng = u32(); o += ng * 4;
+
+  const NODES = new Set(['NiNode','BSFadeNode','BSLeafAnimNode','NiBillboardNode','BSMultiBoundNode','BSOrderedNode','BSValueNode','BSTreeNode','NiSwitchNode','NiLODNode']);
+  const SHAPES = new Set(['NiTriShape','NiTriStrips','BSSegmentedTriShape']);
+  const blocks = [], counts = {};
+  for (let i = 0; i < nb; i++) {
+    const t = types[tix[i]], start = o; counts[t] = (counts[t] || 0) + 1;
+    const b = { t };
+    try {
+      if (NODES.has(t) || SHAPES.has(t)) {
+        b.name = S[i32()] || ''; const ne = u32(); o += ne * 4 + 4; b.hid = u32() & 1; // name, extra data, controller, flags (bit0 = hidden)
+        const tr = [f32(), f32(), f32()], r = []; for (let k = 0; k < 9; k++) r.push(f32());
+        const s = f32(), np = u32(); b.pr = []; for (let k = 0; k < np; k++) b.pr.push(i32()); o += 4;
+        const m = new Float32Array(16);
+        for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) m[c * 4 + a] = r[a * 3 + c] * s;
+        m[12] = tr[0]; m[13] = tr[1]; m[14] = tr[2]; m[15] = 1; b.m = m;
+        if (NODES.has(t)) { const n = u32(); b.ch = []; for (let k = 0; k < n; k++) b.ch.push(i32()); }
+        else b.data = i32();
+      } else if (t === 'NiAlphaProperty') { o += 4; const ne = u32(); o += ne * 4 + 4; b.af = u16(); b.thr = u8();
+      } else if (t === 'BSShaderPPLightingProperty' || t === 'Lighting30ShaderProperty') { o += 4; const ne = u32(); o += ne * 4 + 4 + 22; b.ts = i32();
+      } else if (t === 'BSShaderTextureSet') { const n = i32(); b.tx = []; for (let k = 0; k < n; k++) { const l = u32(); b.tx.push(String.fromCharCode(...new Uint8Array(buf, o, l))); o += l; }
+      } else if (t === 'NiTriShapeData' || t === 'NiTriStripsData') {
+        i32(); const n = u16(); o += 2; const hv = u8(); b.pk = !hv; b.v = new Float32Array(n * 3);
+        if (hv) for (let k = 0; k < n * 3; k++) b.v[k] = f32();
+        const fl = u16(), hn = u8();
+        if (hn) { b.n = new Float32Array(n * 3); for (let k = 0; k < n * 3; k++) b.n[k] = f32(); if (fl & 0x1000) o += n * 24; }
+        o += 16; if (u8()) o += n * 16; const nu = fl & 63; if (nu) { b.uv = new Float32Array(n * 2); for (let k = 0; k < n * 2; k++) b.uv[k] = f32(); o += (nu - 1) * n * 8; } o += 6;
+        const idx = [];
+        if (t === 'NiTriShapeData') {
+          const nTri = u16(); u32();
+          if (u8()) for (let k = 0; k < nTri * 3; k++) idx.push(u16());
+        } else {
+          u16(); const sc = u16(), ln = []; for (let k = 0; k < sc; k++) ln.push(u16());
+          if (u8()) for (const L of ln) { const p = []; for (let k = 0; k < L; k++) p.push(u16());
+            for (let k = 2; k < L; k++) { if (p[k] === p[k-1] || p[k] === p[k-2] || p[k-1] === p[k-2]) continue;
+              k & 1 ? idx.push(p[k-1], p[k-2], p[k]) : idx.push(p[k-2], p[k-1], p[k]); } }
+        }
+        b.i = idx;
+      }
+    } catch (e) { console.warn('Error in block', i, t, e); }
+    blocks.push(b); o = start + sizes[i];
+  }
+  // ---------- Hierarchy traversal ----------
+  const mul = (a, b) => { const r = new Float32Array(16);
+    for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+rr] * b[c*4+k]; r[c*4+rr] = s; } return r; };
+  const I = new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
+  const meshes = []; let skipped = 0;
+  const walk = (id, pm, d) => {
+    const b = blocks[id]; if (!b || !b.m || b.hid || d > 64) return; const w = mul(pm, b.m);
+    if (b.ch) b.ch.forEach(c => c >= 0 && walk(c, w, d + 1));
+    else if (b.data >= 0 && blocks[b.data]?.v) { if (blocks[b.data].pk) skipped++; else meshes.push({ d: blocks[b.data], w, b }); }
+  };
+  walk(0, I, 0);
+  if (!meshes.length) blocks.forEach((b, i) => { if (b.data >= 0 && blocks[b.data]?.v && !blocks[b.data].pk) meshes.push({ d: blocks[b.data], w: b.m || I, b }); });
+  // ---------- Final geometry (Z-up -> Y-up) ----------
+  const V = [], Ix = [], groups = []; let base = 0, tris = 0;
+  const mn = [1e30,1e30,1e30], mx = [-1e30,-1e30,-1e30];
+  for (const { d, w, b } of meshes) {
+    const nv = d.v.length / 3, ni = d.i;
+    let nrm = d.n;
+    if (!nrm) { nrm = new Float32Array(nv * 3);
+      for (let k = 0; k < ni.length; k += 3) { const [a,b,c] = [ni[k]*3, ni[k+1]*3, ni[k+2]*3], p = d.v;
+        const e1 = [p[b]-p[a],p[b+1]-p[a+1],p[b+2]-p[a+2]], e2 = [p[c]-p[a],p[c+1]-p[a+1],p[c+2]-p[a+2]];
+        const n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
+        for (const q of [a,b,c]) for (let j = 0; j < 3; j++) nrm[q+j] += n[j]; } }
+    for (let k = 0; k < nv; k++) {
+      const x = d.v[k*3], y = d.v[k*3+1], z = d.v[k*3+2];
+      const px = w[0]*x + w[4]*y + w[8]*z + w[12], py = w[1]*x + w[5]*y + w[9]*z + w[13], pz = w[2]*x + w[6]*y + w[10]*z + w[14];
+      const nx0 = nrm[k*3], ny0 = nrm[k*3+1], nz0 = nrm[k*3+2];
+      const nx = w[0]*nx0 + w[4]*ny0 + w[8]*nz0, ny = w[1]*nx0 + w[5]*ny0 + w[9]*nz0, nz = w[2]*nx0 + w[6]*ny0 + w[10]*nz0;
+      const P = [px, pz, -py]; for (let j = 0; j < 3; j++) { mn[j] = Math.min(mn[j], P[j]); mx[j] = Math.max(mx[j], P[j]); }
+      V.push(P[0], P[1], P[2], nx, nz, -ny, d.uv ? d.uv[k*2] : 0, d.uv ? d.uv[k*2+1] : 0);
+    }
+    const pr = (b.pr || []).map(q => blocks[q]).filter(Boolean), al = pr.find(q => q.t === 'NiAlphaProperty'), sh = pr.find(q => q.ts !== undefined);
+    const tset = blocks[sh?.ts]?.tx || [];
+    const nm = p => p ? p.split(/[\\/]/).pop().toLowerCase().replace(/\.[^.]+$/, '') : '';
+    groups.push({ s: Ix.length, c: ni.length, tex: nm(tset[0]), ntex: nm(tset[1]), ref: al ? (al.af & 0x200 ? al.thr / 255 : al.af & 1 ? 0.05 : 0) : 0 });
+    for (const j of ni) Ix.push(j + base);
+    base += nv; tris += ni.length / 3;
+  }
+  if (!tris) throw new Error('No geometry (NiTriShape/NiTriStrips) found');
+  return { verts: new Float32Array(V), idx: new Uint32Array(Ix), mn, mx, tris, nv: base, nm: meshes.length, counts, line, groups, skipped };
+}
+
+// ---------- Matrices ----------
+const M = {
+  persp(fov, a, n, f) { const t = 1 / Math.tan(fov / 2); return new Float32Array([t/a,0,0,0, 0,t,0,0, 0,0,f/(n-f),-1, 0,0,f*n/(n-f),0]); },
+  look(e, c, u) {
+    let z = [e[0]-c[0], e[1]-c[1], e[2]-c[2]]; let l = Math.hypot(...z); z = z.map(v => v / l);
+    let x = [u[1]*z[2]-u[2]*z[1], u[2]*z[0]-u[0]*z[2], u[0]*z[1]-u[1]*z[0]]; l = Math.hypot(...x); x = x.map(v => v / l);
+    const y = [z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
+    const d = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -d(x,e),-d(y,e),-d(z,e),1]);
+  },
+  mul(a, b) { const r = new Float32Array(16);
+    for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+rr] * b[c*4+k]; r[c*4+rr] = s; } return r; }
+};
+
+// ---------- WebGPU ----------
+const WGSL = `
+struct U { vp: mat4x4f, light: vec4f, opt: vec4f };
+struct Mt { cut: f32, on: f32, hasN: f32, pad: f32 };
+@group(0) @binding(0) var<uniform> u: U;
+@group(1) @binding(0) var tx: texture_2d<f32>;
+@group(1) @binding(1) var sm: sampler;
+@group(1) @binding(2) var<uniform> mt: Mt;
+@group(1) @binding(3) var nt: texture_2d<f32>;
+struct VO { @builtin(position) p: vec4f, @location(0) n: vec3f, @location(1) uv: vec2f, @location(2) wp: vec3f };
+@vertex fn vs(@location(0) pos: vec3f, @location(1) nrm: vec3f, @location(2) uv: vec2f) -> VO {
+  var o: VO; o.p = u.vp * vec4f(pos, 1.0); o.n = nrm; o.uv = uv; o.wp = pos; return o; }
+// Tangent frame rebuilt from screen-space derivatives, so it follows the UV flip toggle.
+fn cotangent(n: vec3f, p: vec3f, uv: vec2f) -> mat3x3f {
+  let dp1 = dpdx(p); let dp2 = dpdy(p);
+  let du1 = dpdx(uv); let du2 = dpdy(uv);
+  let p2 = cross(dp2, n); let p1 = cross(n, dp1);
+  let T = p2 * du1.x + p1 * du2.x;
+  let B = p2 * du1.y + p1 * du2.y;
+  let s = inverseSqrt(max(max(dot(T, T), dot(B, B)), 1e-12));
+  return mat3x3f(T * s, B * s, n);
+}
+@fragment fn fs_solid(i: VO, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
+  let uv = vec2f(i.uv.x, select(i.uv.y, 1.0 - i.uv.y, u.opt.x > 0.5));
+  var n = normalize(i.n); if (!ff) { n = -n; }
+  let t = textureSample(tx, sm, uv);
+  var base = vec3f(0.78, 0.74, 0.66);
+  if (mt.on > 0.5 && u.light.w > 0.5) { if (t.a < mt.cut) { discard; } base = t.rgb; }
+  if (mt.hasN > 0.5 && u.opt.y > 0.5) {
+    // Bethesda/FNV normal maps use the DirectX convention (green = +V), matching this frame.
+    let nm = textureSample(nt, sm, uv).xyz * 2.0 - 1.0;
+    n = normalize(cotangent(n, i.wp, uv) * nm);
+  }
+  let d = max(dot(n, u.light.xyz), 0.0);
+  let hemi = 0.5 + 0.5 * n.y;
+  return vec4f(base * (0.18 + 0.25 * hemi + 0.7 * d), 1.0); }
+@fragment fn fs_wire() -> @location(0) vec4f { return vec4f(0.88, 0.65, 0.15, 1.0); }
+`;
+const $ = id => document.getElementById(id);
+const cv = $('cv'), info = $('info');
+let dev, ctx, fmt, depth, ubuf, bind, pSolid, pWire, bgl1, samp, white, flatN, geo = null;
+const cam = { yaw: 0.6, pitch: 0.35, dist: 3, target: [0,0,0], rad: 1 };
+
+async function initGPU() {
+  if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
+  const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('No WebGPU adapter');
+  dev = await ad.requestDevice(); ctx = cv.getContext('webgpu'); fmt = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device: dev, format: fmt, alphaMode: 'opaque' });
+  ubuf = dev.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const mod = dev.createShaderModule({ code: WGSL });
+  const bgl = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }] });
+  bind = dev.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: ubuf } }] });
+  bgl1 = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} }] });
+  samp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
+  const layout = dev.createPipelineLayout({ bindGroupLayouts: [bgl] }), layoutS = dev.createPipelineLayout({ bindGroupLayouts: [bgl, bgl1] });
+  const vbuf = { arrayStride: 32, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }, { shaderLocation: 2, offset: 24, format: 'float32x2' }] };
+  const mk = (fsEntry, topology, bias) => dev.createRenderPipeline({ layout: fsEntry === 'fs_solid' ? layoutS : layout,
+    vertex: { module: mod, entryPoint: 'vs', buffers: [vbuf] },
+    fragment: { module: mod, entryPoint: fsEntry, targets: [{ format: fmt }] },
+    primitive: { topology, cullMode: 'none' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal', ...(bias ? { depthBias: 2, depthBiasSlopeScale: 2 } : {}) } });
+  pSolid = mk('fs_solid', 'triangle-list', true);
+  pWire = mk('fs_wire', 'line-list', false);
+  white = mkTex(1, 1, new Uint8Array([255, 255, 255, 255]));
+  flatN = mkTex(1, 1, new Uint8Array([128, 128, 255, 255]));
+  new ResizeObserver(resize).observe(cv); resize();
+}
+function resize() {
+  const dpr = devicePixelRatio || 1, w = Math.max(1, cv.clientWidth * dpr | 0), h = Math.max(1, cv.clientHeight * dpr | 0);
+  cv.width = w; cv.height = h; if (!dev) return;
+  depth?.destroy(); depth = dev.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+}
+function mkBuf(data, usage) { const b = dev.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | GPUBufferUsage.COPY_DST }); dev.queue.writeBuffer(b, 0, data); return b; }
+
+const lib = new Map(), imgs = new Map(); // texture name (without extension) -> GPUTexture
+function mkTex(w, h, data) {
+  const t = dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+  dev.queue.writeTexture({ texture: t }, data, { bytesPerRow: w * 4 }, [w, h]); return t;
+}
+function decodeDDS(buf) {
+  const dv = new DataView(buf); if (dv.getUint32(0, true) !== 0x20534444) throw new Error('Invalid DDS');
+  const h = dv.getUint32(12, true), w = dv.getUint32(16, true), fc = String.fromCharCode(...new Uint8Array(buf, 84, 4)).replace(/\0/g, ''), bpp = dv.getUint32(88, true), out = new Uint8Array(w * h * 4);
+  if (/^DXT[135]$/.test(fc)) {
+    const k = +fc[3], bs = k === 1 ? 8 : 16, bw = (w + 3) >> 2, e5 = v => [(v >> 11 & 31) * 255 / 31 | 0, (v >> 5 & 63) * 255 / 63 | 0, (v & 31) * 255 / 31 | 0];
+    for (let by = 0; by < h; by += 4) for (let bx = 0; bx < w; bx += 4) {
+      const p = 128 + ((by >> 2) * bw + (bx >> 2)) * bs, c = k === 1 ? p : p + 8;
+      const c0 = dv.getUint16(c, true), c1 = dv.getUint16(c + 2, true), A = e5(c0), B = e5(c1), P = [[...A, 255], [...B, 255]];
+      if (k > 1 || c0 > c1) P.push([...A.map((a, i) => (2 * a + B[i]) / 3 | 0), 255], [...A.map((a, i) => (a + 2 * B[i]) / 3 | 0), 255]);
+      else P.push([...A.map((a, i) => a + B[i] >> 1), 255], [0, 0, 0, 0]);
+      const bits = dv.getUint32(c + 4, true), a0 = dv.getUint8(p), a1 = dv.getUint8(p + 1), lo = dv.getUint32(p + 2, true), hi = dv.getUint16(p + 6, true);
+      for (let i = 0; i < 16; i++) {
+        const x = bx + (i & 3), y = by + (i >> 2); if (x >= w || y >= h) continue;
+        const px = P[bits >> 2 * i & 3]; let a = px[3];
+        if (k === 3) a = (dv.getUint8(p + (i >> 1)) >> (i & 1) * 4 & 15) * 17;
+        else if (k === 5) { const o3 = 3 * i, q = o3 < 32 ? (lo >>> o3 | (o3 > 29 ? hi << 32 - o3 : 0)) & 7 : hi >> o3 - 32 & 7;
+          a = q === 0 ? a0 : q === 1 ? a1 : a0 > a1 ? ((8 - q) * a0 + (q - 1) * a1) / 7 : q < 6 ? ((6 - q) * a0 + (q - 1) * a1) / 5 : q === 6 ? 0 : 255; }
+        out.set([px[0], px[1], px[2], a], (y * w + x) * 4);
+      }
+    }
+  } else if (bpp === 32 && !fc) {
+    const m = [92, 96, 100, 104].map(q => dv.getUint32(q, true)), sh = m.map(v => v ? 31 - Math.clz32(v & -v) : 0);
+    for (let i = 0; i < w * h; i++) { const v = dv.getUint32(128 + i * 4, true); for (let j = 0; j < 4; j++) out[i * 4 + j] = m[j] ? (v & m[j]) >>> sh[j] : 255; }
+  } else throw new Error('unsupported DDS format (' + (fc || bpp + 'bpp') + ')');
+  return { w, h, d: out };
+}
+async function loadTex(f) {
+  let t, tc = document.createElement('canvas'); if (/\.dds$/i.test(f.name)) { const x = decodeDDS(await f.arrayBuffer()); t = mkTex(x.w, x.h, x.d); tc.width = x.w; tc.height = x.h; tc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(x.d), x.w, x.h), 0, 0); }
+  else { const bm = await createImageBitmap(f); tc.width = bm.width; tc.height = bm.height; tc.getContext('2d').drawImage(bm, 0, 0); t = dev.createTexture({ size: [bm.width, bm.height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT }); dev.queue.copyExternalImageToTexture({ source: bm }, { texture: t }, [bm.width, bm.height]); }
+  const key = f.name.toLowerCase().replace(/\.[^.]+$/, ''); lib.set(key, t); imgs.set(key, tc);
+}
+function mkGroup(g) {
+  const t = lib.get(g.tex), nt = lib.get(g.ntex) || (g.tex ? lib.get(g.tex + '_n') : undefined), ub = dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  dev.queue.writeBuffer(ub, 0, new Float32Array([g.ref, t ? 1 : 0, nt ? 1 : 0, 0]));
+  return { s: g.s, c: g.c, bg: dev.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: (t || white).createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: ub } }, { binding: 3, resource: (nt || flatN).createView() }] }) };
+}
+function setModel(r, keep) {
+  geo?.vb.destroy(); geo?.ib.destroy(); geo?.lb.destroy();
+  const L = new Uint32Array(r.idx.length * 2);
+  for (let k = 0; k < r.idx.length; k += 3) { L.set([r.idx[k], r.idx[k+1], r.idx[k+1], r.idx[k+2], r.idx[k+2], r.idx[k]], k * 2); }
+  geo = { vb: mkBuf(r.verts, GPUBufferUsage.VERTEX), ib: mkBuf(r.idx, GPUBufferUsage.INDEX), lb: mkBuf(L, GPUBufferUsage.INDEX), ni: r.idx.length, nl: L.length, g: r.groups.map(mkGroup) };
+  if (keep) return;
+  cam.target = r.mn.map((v, i) => (v + r.mx[i]) / 2);
+  cam.rad = Math.hypot(...r.mn.map((v, i) => r.mx[i] - v)) / 2 || 1;
+  resetCam();
+}
+function resetCam() { cam.yaw = 0.6; cam.pitch = 0.35; cam.dist = cam.rad * 2.6; }
+
+function frame() {
+  if (dev && depth) {
+    const asp = cv.width / cv.height, cp = Math.cos(cam.pitch);
+    const dir = [cp * Math.sin(cam.yaw), Math.sin(cam.pitch), cp * Math.cos(cam.yaw)];
+    const eye = cam.target.map((t, i) => t + dir[i] * cam.dist);
+    const vp = M.mul(M.persp(Math.PI / 4, asp, cam.rad * 0.01, cam.rad * 50), M.look(eye, cam.target, [0, 1, 0]));
+    const ld = [dir[0] + 0.3, dir[1] + 0.5, dir[2] + 0.2], ll = Math.hypot(...ld);
+    dev.queue.writeBuffer(ubuf, 0, vp); dev.queue.writeBuffer(ubuf, 64, new Float32Array([ld[0]/ll, ld[1]/ll, ld[2]/ll, $('tex').checked ? 1 : 0])); dev.queue.writeBuffer(ubuf, 80, new Float32Array([$('flipv').checked ? 1 : 0, $('nrm').checked ? 1 : 0, 0, 0]));
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: { r: 0.08, g: 0.09, b: 0.1, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+      depthStencilAttachment: { view: depth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
+    if (geo) {
+      pass.setVertexBuffer(0, geo.vb);
+      if ($('solid').checked) { pass.setPipeline(pSolid); pass.setBindGroup(0, bind); pass.setIndexBuffer(geo.ib, 'uint32'); for (const g of geo.g) { pass.setBindGroup(1, g.bg); pass.drawIndexed(g.c, 1, g.s); } }
+      if ($('wire').checked) { pass.setPipeline(pWire); pass.setBindGroup(0, bind); pass.setIndexBuffer(geo.lb, 'uint32'); pass.drawIndexed(geo.nl); }
+    }
+    pass.end(); dev.queue.submit([enc.finish()]);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------- Input ----------
+let cur = null;
+function drawUV() {
+  const r = cur, c = $('uvc'), p = $('uvp'); if (!r) return;
+  p.style.display = $('uv').checked ? 'flex' : 'none';
+  const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = r.groups.find(q => imgs.has(q.tex));
+  g.fillStyle = '#222'; g.fillRect(0, 0, S, S); if (q) g.drawImage(imgs.get(q.tex), 0, 0, S, S);
+  g.strokeStyle = 'rgba(255,170,0,.9)'; g.lineWidth = 1;
+  for (let k = 0; k < r.idx.length; k += 3) { g.beginPath(); for (let j = 0; j < 3; j++) { const a = r.idx[k + j] * 8 + 6, v = r.verts[a + 1], x = r.verts[a] * S, y = (fl ? 1 - v : v) * S; j ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.stroke(); }
+}
+$('flipv').onchange = drawUV;
+function texList(r) {
+  const seen = new Map();
+  const add = (n, role) => { if (!n) return; const e = seen.get(n) || { name: n, roles: new Set() }; e.roles.add(role); seen.set(n, e); };
+  for (const g of r.groups) {
+    add(g.tex, 'diffuse');
+    // Only expect a normal map when the NIF references one or the file was actually provided.
+    if (g.ntex) add(g.ntex, 'normal');
+    else if (g.tex && lib.has(g.tex + '_n')) add(g.tex + '_n', 'normal');
+  }
+  return [...seen.values()];
+}
+function renderTexPanel() {
+  const r = cur, p = $('texp'), ul = $('texl');
+  if (!r) { p.style.display = 'none'; return; }
+  const list = texList(r), miss = list.filter(e => !lib.has(e.name));
+  p.style.display = 'flex';
+  $('texh').textContent = `Textures — ${list.length - miss.length}/${list.length} loaded`;
+  ul.textContent = '';
+  for (const e of list) {
+    const ok = lib.has(e.name), li = document.createElement('li');
+    if (!ok) li.className = 'miss';
+    li.title = ok ? e.name : `Missing ${e.name}.dds — drag it into the window`;
+    const ic = document.createElement('i');
+    ic.className = 'mdi ' + (ok ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
+    const k = document.createElement('span'); k.className = 'k'; k.textContent = [...e.roles].join(' + ');
+    li.append(ic, nm, k); ul.appendChild(li);
+  }
+  if (miss.length) {
+    const li = document.createElement('li'); li.className = 'hint';
+    li.textContent = `Missing ${miss.length} file${miss.length > 1 ? 's' : ''}. Drag the .dds files (diffuse and _n normal maps) into the window to load them.`;
+    ul.appendChild(li);
+  }
+}
+function showInfo(errs = []) {
+  const r = cur; if (!r) return;
+  const list = texList(r), miss = list.filter(e => !lib.has(e.name));
+  info.textContent = `${r.fn}\n${r.line}\nMeshes: ${r.nm}  Vertices: ${r.nv}  Triangles: ${r.tris}` +
+    (r.skipped ? `\nSkipped (geometry in BSPackedAdditionalGeometryData, not supported): ${r.skipped}` : '') +
+    `\nTextures: ${list.length ? `${list.length - miss.length}/${list.length} loaded` : 'none referenced'}` +
+    (miss.length ? `\nMissing: ${miss.map(e => e.name + '.dds').join(', ')}` : '') +
+    '\nBlocks: ' + Object.entries(r.counts).map(([k, v]) => `${k}×${v}`).join(', ') + (errs.length ? '\n' + errs.join('\n') : '');
+  renderTexPanel();
+}
+async function loadFiles(fl) {
+  fl = [...fl]; const nf = fl.find(f => /\.nif$/i.test(f.name)), errs = [];
+  for (const f of fl) if (/\.(dds|png|jpe?g|webp)$/i.test(f.name)) try { await loadTex(f); } catch (e) { errs.push(f.name + ': ' + e.message); }
+  try {
+    if (nf) { cur = parseNif(await nf.arrayBuffer()); cur.fn = nf.name; setModel(cur); $('drop').classList.add('h'); }
+    else if (cur) setModel(cur, true); else throw new Error('Open a .nif file first');
+    showInfo(errs); drawUV();
+  } catch (e) { info.textContent = 'Error: ' + e.message; console.error(e); }
+}
+$('file').onchange = e => loadFiles(e.target.files);
+$('reset').onclick = resetCam;
+$('uv').onchange = drawUV;
+addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', n: 'nrm', f: 'flipv', u: 'uv' };
+  if (map[k]) { const el = $(map[k]); el.checked = !el.checked; el.dispatchEvent(new Event('change')); }
+  else if (k === 'r') resetCam();
+  else if (k === 'o') $('file').click();
+});
+addEventListener('dragover', e => { e.preventDefault(); $('drop').classList.add('over'); });
+addEventListener('dragleave', () => $('drop').classList.remove('over'));
+addEventListener('drop', e => { e.preventDefault(); $('drop').classList.remove('over'); loadFiles(e.dataTransfer.files); });
+const ptr = new Map();
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); ptr.set(e.pointerId, e); });
+cv.addEventListener('pointerup', e => ptr.delete(e.pointerId));
+cv.addEventListener('pointermove', e => {
+  const p = ptr.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.clientX, dy = e.clientY - p.clientY; ptr.set(e.pointerId, e);
+  if (e.buttons & 2 || e.shiftKey) { // pan
+    const k = cam.dist * 0.0015, cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = [cy, 0, -sy], up = [0, 1, 0];
+    cam.target = cam.target.map((t, i) => t - rx[i] * dx * k + up[i] * dy * k);
+  } else { cam.yaw -= dx * 0.008; cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.008)); }
+});
+cv.addEventListener('wheel', e => { e.preventDefault(); cam.dist *= Math.exp(e.deltaY * 0.001); }, { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+initGPU().then(frame).catch(e => { info.textContent = 'Error: ' + e.message; });
+</script>
+</body>
+</html>
