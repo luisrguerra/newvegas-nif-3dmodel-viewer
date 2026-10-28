@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visualizador NIF – Fallout New Vegas</title>
+<title>NIF Viewer – Fallout New Vegas</title>
 <style>
 :root{--bg:#14161a;--fg:#e6e2d3;--ac:#e0a526;--pn:#1d2026;--bd:#2c313a}
 *{box-sizing:border-box}
@@ -23,19 +23,19 @@ label.c{display:flex;gap:4px;align-items:center;cursor:pointer}
 <body>
 <canvas id="cv"></canvas>
 <div class="bar">
-  <label class="b">Abrir .nif / texturas<input id="file" type="file" accept=".nif,.dds,.png,.jpg,.jpeg,.webp" multiple hidden></label>
+  <label class="b">Open .nif / textures<input id="file" type="file" accept=".nif,.dds,.png,.jpg,.jpeg,.webp" multiple hidden></label>
   <label class="c"><input id="wire" type="checkbox" checked> Wireframe</label>
-  <label class="c"><input id="solid" type="checkbox" checked> Sólido</label>
-  <label class="c"><input id="tex" type="checkbox" checked> Texturas</label>
-  <label class="c"><input id="flipv" type="checkbox"> Inverter V</label>
-  <button id="reset">Resetar câmera</button>
+  <label class="c"><input id="solid" type="checkbox" checked> Solid</label>
+  <label class="c"><input id="tex" type="checkbox" checked> Textures</label>
+  <label class="c"><input id="flipv" type="checkbox"> Flip V</label>
+  <button id="reset">Reset camera</button>
 </div>
-<div id="info">Nenhum modelo carregado</div>
+<div id="info">No model loaded</div>
 <canvas id="uvc" width="256" height="256"></canvas>
-<div id="drop">Arraste um .nif aqui (junto com os .dds, se quiser texturas)<br><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
+<div id="drop">Drag a .nif here (along with the .dds files if you want textures)<br><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
 
 <script>
-// ---------- Parser NIF (FNV: v20.2.0.7, user 11, BS 34) ----------
+// ---------- NIF parser (FNV: v20.2.0.7, user 11, BS 34) ----------
 function parseNif(buf) {
   const dv = new DataView(buf); let o = 0;
   const u8 = () => dv.getUint8(o++);
@@ -44,10 +44,10 @@ function parseNif(buf) {
   const i32 = () => { const v = dv.getInt32(o, true); o += 4; return v; };
   const f32 = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
   let line = ''; while (o < 200) { const c = u8(); if (c === 10) break; line += String.fromCharCode(c); }
-  if (!/Gamebryo|NetImmerse/.test(line)) throw new Error('Não é um arquivo NIF válido');
+  if (!/Gamebryo|NetImmerse/.test(line)) throw new Error('Not a valid NIF file');
   const ver = u32(); u8(); const uv = u32(); const nb = u32();
-  if (ver !== 0x14020007) throw new Error('Versão NIF não suportada: 0x' + ver.toString(16) + ' (esperado 20.2.0.7)');
-  if (uv >= 3) { const uv2 = u32(); if (uv2 > 34) throw new Error('Stream BS ' + uv2 + ' (Skyrim/Fallout 4) não suportado — apenas Fallout 3 / New Vegas'); for (let k = 0; k < 3; k++) { const sl = u8(); o += sl; } }
+  if (ver !== 0x14020007) throw new Error('Unsupported NIF version: 0x' + ver.toString(16) + ' (expected 20.2.0.7)');
+  if (uv >= 3) { const uv2 = u32(); if (uv2 > 34) throw new Error('BS stream ' + uv2 + ' (Skyrim/Fallout 4) not supported — Fallout 3 / New Vegas only'); for (let k = 0; k < 3; k++) { const sl = u8(); o += sl; } }
   const nt = u16(), types = [];
   for (let k = 0; k < nt; k++) { const l = u32(); types.push(String.fromCharCode(...new Uint8Array(buf, o, l))); o += l; }
   const tix = []; for (let k = 0; k < nb; k++) tix.push(u16());
@@ -63,7 +63,7 @@ function parseNif(buf) {
     const b = { t };
     try {
       if (NODES.has(t) || SHAPES.has(t)) {
-        b.name = S[i32()] || ''; const ne = u32(); o += ne * 4 + 4; b.hid = u32() & 1; // nome, extra data, controller, flags (bit0 = oculto)
+        b.name = S[i32()] || ''; const ne = u32(); o += ne * 4 + 4; b.hid = u32() & 1; // name, extra data, controller, flags (bit0 = hidden)
         const tr = [f32(), f32(), f32()], r = []; for (let k = 0; k < 9; k++) r.push(f32());
         const s = f32(), np = u32(); b.pr = []; for (let k = 0; k < np; k++) b.pr.push(i32()); o += 4;
         const m = new Float32Array(16);
@@ -92,10 +92,10 @@ function parseNif(buf) {
         }
         b.i = idx;
       }
-    } catch (e) { console.warn('Erro no bloco', i, t, e); }
+    } catch (e) { console.warn('Error in block', i, t, e); }
     blocks.push(b); o = start + sizes[i];
   }
-  // ---------- Travessia da hierarquia ----------
+  // ---------- Hierarchy traversal ----------
   const mul = (a, b) => { const r = new Float32Array(16);
     for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+rr] * b[c*4+k]; r[c*4+rr] = s; } return r; };
   const I = new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
@@ -107,7 +107,7 @@ function parseNif(buf) {
   };
   walk(0, I, 0);
   if (!meshes.length) blocks.forEach((b, i) => { if (b.data >= 0 && blocks[b.data]?.v && !blocks[b.data].pk) meshes.push({ d: blocks[b.data], w: b.m || I, b }); });
-  // ---------- Geometria final (Z-up -> Y-up) ----------
+  // ---------- Final geometry (Z-up -> Y-up) ----------
   const V = [], Ix = [], groups = []; let base = 0, tris = 0;
   const mn = [1e30,1e30,1e30], mx = [-1e30,-1e30,-1e30];
   for (const { d, w, b } of meshes) {
@@ -132,11 +132,11 @@ function parseNif(buf) {
     for (const j of ni) Ix.push(j + base);
     base += nv; tris += ni.length / 3;
   }
-  if (!tris) throw new Error('Nenhuma geometria (NiTriShape/NiTriStrips) encontrada');
+  if (!tris) throw new Error('No geometry (NiTriShape/NiTriStrips) found');
   return { verts: new Float32Array(V), idx: new Uint32Array(Ix), mn, mx, tris, nv: base, nm: meshes.length, counts, line, groups, skipped };
 }
 
-// ---------- Matrizes ----------
+// ---------- Matrices ----------
 const M = {
   persp(fov, a, n, f) { const t = 1 / Math.tan(fov / 2); return new Float32Array([t/a,0,0,0, 0,t,0,0, 0,0,f/(n-f),-1, 0,0,f*n/(n-f),0]); },
   look(e, c, u) {
@@ -177,8 +177,8 @@ let dev, ctx, fmt, depth, ubuf, bind, pSolid, pWire, bgl1, samp, white, geo = nu
 const cam = { yaw: 0.6, pitch: 0.35, dist: 3, target: [0,0,0], rad: 1 };
 
 async function initGPU() {
-  if (!navigator.gpu) throw new Error('WebGPU não disponível neste navegador');
-  const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('Nenhum adaptador WebGPU');
+  if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
+  const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('No WebGPU adapter');
   dev = await ad.requestDevice(); ctx = cv.getContext('webgpu'); fmt = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device: dev, format: fmt, alphaMode: 'opaque' });
   ubuf = dev.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -206,13 +206,13 @@ function resize() {
 }
 function mkBuf(data, usage) { const b = dev.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | GPUBufferUsage.COPY_DST }); dev.queue.writeBuffer(b, 0, data); return b; }
 
-const lib = new Map(), imgs = new Map(); // nome da textura (sem extensão) -> GPUTexture
+const lib = new Map(), imgs = new Map(); // texture name (without extension) -> GPUTexture
 function mkTex(w, h, data) {
   const t = dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
   dev.queue.writeTexture({ texture: t }, data, { bytesPerRow: w * 4 }, [w, h]); return t;
 }
 function decodeDDS(buf) {
-  const dv = new DataView(buf); if (dv.getUint32(0, true) !== 0x20534444) throw new Error('DDS inválido');
+  const dv = new DataView(buf); if (dv.getUint32(0, true) !== 0x20534444) throw new Error('Invalid DDS');
   const h = dv.getUint32(12, true), w = dv.getUint32(16, true), fc = String.fromCharCode(...new Uint8Array(buf, 84, 4)).replace(/\0/g, ''), bpp = dv.getUint32(88, true), out = new Uint8Array(w * h * 4);
   if (/^DXT[135]$/.test(fc)) {
     const k = +fc[3], bs = k === 1 ? 8 : 16, bw = (w + 3) >> 2, e5 = v => [(v >> 11 & 31) * 255 / 31 | 0, (v >> 5 & 63) * 255 / 63 | 0, (v & 31) * 255 / 31 | 0];
@@ -234,7 +234,7 @@ function decodeDDS(buf) {
   } else if (bpp === 32 && !fc) {
     const m = [92, 96, 100, 104].map(q => dv.getUint32(q, true)), sh = m.map(v => v ? 31 - Math.clz32(v & -v) : 0);
     for (let i = 0; i < w * h; i++) { const v = dv.getUint32(128 + i * 4, true); for (let j = 0; j < 4; j++) out[i * 4 + j] = m[j] ? (v & m[j]) >>> sh[j] : 255; }
-  } else throw new Error('formato DDS não suportado (' + (fc || bpp + 'bpp') + ')');
+  } else throw new Error('unsupported DDS format (' + (fc || bpp + 'bpp') + ')');
   return { w, h, d: out };
 }
 async function loadTex(f) {
@@ -281,7 +281,7 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
-// ---------- Entrada ----------
+// ---------- Input ----------
 let cur = null;
 function drawUV() {
   const r = cur, c = $('uvc'); if (!r) return; const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = r.groups.find(q => imgs.has(q.tex));
@@ -293,19 +293,19 @@ $('flipv').onchange = drawUV;
 function showInfo(errs = []) {
   const r = cur; if (!r) return;
   const tn = [...new Set(r.groups.map(g => g.tex).filter(Boolean))];
-  info.textContent = `${r.fn}\n${r.line}\nMalhas: ${r.nm}  Vértices: ${r.nv}  Triângulos: ${r.tris}` +
-    (r.skipped ? `\nIgnoradas (geometria em BSPackedAdditionalGeometryData, não suportada): ${r.skipped}` : '') +
-    '\nTexturas: ' + (tn.length ? tn.map(n => n + (lib.has(n) ? ' ✓' : ' ✗')).join(', ') + (tn.some(n => !lib.has(n)) ? '  (arraste os .dds junto)' : '') : 'nenhuma referenciada') +
-    '\nBlocos: ' + Object.entries(r.counts).map(([k, v]) => `${k}×${v}`).join(', ') + (errs.length ? '\n' + errs.join('\n') : '');
+  info.textContent = `${r.fn}\n${r.line}\nMeshes: ${r.nm}  Vertices: ${r.nv}  Triangles: ${r.tris}` +
+    (r.skipped ? `\nSkipped (geometry in BSPackedAdditionalGeometryData, not supported): ${r.skipped}` : '') +
+    '\nTextures: ' + (tn.length ? tn.map(n => n + (lib.has(n) ? ' ✓' : ' ✗')).join(', ') + (tn.some(n => !lib.has(n)) ? '  (drag the .dds files along)' : '') : 'none referenced') +
+    '\nBlocks: ' + Object.entries(r.counts).map(([k, v]) => `${k}×${v}`).join(', ') + (errs.length ? '\n' + errs.join('\n') : '');
 }
 async function loadFiles(fl) {
   fl = [...fl]; const nf = fl.find(f => /\.nif$/i.test(f.name)), errs = [];
   for (const f of fl) if (/\.(dds|png|jpe?g|webp)$/i.test(f.name)) try { await loadTex(f); } catch (e) { errs.push(f.name + ': ' + e.message); }
   try {
     if (nf) { cur = parseNif(await nf.arrayBuffer()); cur.fn = nf.name; setModel(cur); $('drop').classList.add('h'); }
-    else if (cur) setModel(cur, true); else throw new Error('Abra um arquivo .nif primeiro');
+    else if (cur) setModel(cur, true); else throw new Error('Open a .nif file first');
     showInfo(errs); drawUV();
-  } catch (e) { info.textContent = 'Erro: ' + e.message; console.error(e); }
+  } catch (e) { info.textContent = 'Error: ' + e.message; console.error(e); }
 }
 $('file').onchange = e => loadFiles(e.target.files);
 $('reset').onclick = resetCam;
@@ -327,7 +327,7 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('wheel', e => { e.preventDefault(); cam.dist *= Math.exp(e.deltaY * 0.001); }, { passive: false });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 
-initGPU().then(frame).catch(e => { info.textContent = 'Erro: ' + e.message; });
+initGPU().then(frame).catch(e => { info.textContent = 'Error: ' + e.message; });
 </script>
 </body>
 </html>
