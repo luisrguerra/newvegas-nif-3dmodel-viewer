@@ -4,35 +4,87 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NIF Viewer – Fallout New Vegas</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
 <style>
-:root{--bg:#14161a;--fg:#e6e2d3;--ac:#e0a526;--pn:#1d2026;--bd:#2c313a}
+:root{--bg:#14161a;--fg:#e6e2d3;--ac:#e0a526;--ac2:#f7cd63;--pn:#1d2026e6;--bd:#2c313a;--bd2:#3b4250;--mut:#98a0ad;--ok:#6fcf7f;--err:#e06c6c}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;overflow:hidden}
-canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
-canvas:active{cursor:grabbing}
-#uvc{inset:auto;right:10px;bottom:10px;width:256px;height:256px;cursor:default;display:none;z-index:2;border:1px solid var(--bd);border-radius:8px}
-.bar{position:fixed;top:10px;left:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--pn);border:1px solid var(--bd);padding:8px 10px;border-radius:8px;z-index:2}
-button,label.b{background:var(--ac);color:#1a1405;border:0;padding:6px 12px;border-radius:5px;font-weight:600;cursor:pointer}
-label.c{display:flex;gap:4px;align-items:center;cursor:pointer}
-#info{max-height:45vh;overflow:auto;position:fixed;left:10px;bottom:10px;background:var(--pn);border:1px solid var(--bd);padding:8px 10px;border-radius:8px;font:12px ui-monospace,monospace;white-space:pre;z-index:2;max-width:90vw}
-#drop{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;font-size:20px;opacity:.6;text-align:center}
+canvas#cv{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+canvas#cv:active{cursor:grabbing}
+.mdi{line-height:1;font-size:18px;vertical-align:-3px}
+
+/* ---------- toolbar ---------- */
+.bar{position:fixed;top:12px;left:12px;right:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+  background:var(--pn);border:1px solid var(--bd);padding:7px 9px;border-radius:12px;z-index:3;
+  box-shadow:0 8px 24px #0008;backdrop-filter:blur(10px)}
+.brand{display:flex;align-items:center;gap:8px;padding:0 6px 0 2px;user-select:none}
+.brand>.mdi{font-size:24px;color:var(--ac)}
+.brand b{display:block;font-size:13px;letter-spacing:.4px;line-height:1.15}
+.brand small{display:block;font-size:10px;color:var(--mut);letter-spacing:.6px;text-transform:uppercase}
+.sep{width:1px;align-self:stretch;background:var(--bd2);margin:2px 4px}
+
+.btn,.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;border-radius:8px;
+  padding:6px 11px;font:600 12.5px system-ui,sans-serif;cursor:pointer;user-select:none;
+  transition:background .15s,color .15s,border-color .15s,transform .1s}
+.btn{background:var(--ac);color:#1a1405}
+.btn:hover{background:var(--ac2)}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:#ffffff0d;color:var(--fg);border-color:var(--bd2)}
+.btn.ghost:hover{background:#ffffff1a;border-color:#4a5262}
+.chip{background:#ffffff08;color:var(--mut);border-color:var(--bd2)}
+.chip:hover{background:#ffffff14;color:var(--fg)}
+.chip input{position:absolute;opacity:0;pointer-events:none}
+.chip .mdi{font-size:16px}
+.chip:has(input:checked){background:#e0a5261f;border-color:#e0a52666;color:var(--ac2)}
+.chip:has(input:focus-visible),.btn:focus-visible{outline:2px solid var(--ac2);outline-offset:2px}
+
+/* ---------- panels ---------- */
+.panel{position:fixed;background:var(--pn);border:1px solid var(--bd);border-radius:12px;z-index:2;
+  box-shadow:0 8px 24px #0008;backdrop-filter:blur(10px);overflow:hidden}
+.ph{display:flex;align-items:center;gap:6px;padding:7px 10px;font:600 11px system-ui,sans-serif;
+  letter-spacing:.8px;text-transform:uppercase;color:var(--mut);background:#ffffff06;border-bottom:1px solid var(--bd)}
+.ph>.mdi{font-size:15px;color:var(--ac)}
+.info-panel{left:12px;bottom:12px;max-width:min(560px,90vw)}
+#info{margin:0;padding:9px 11px;max-height:42vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:#d7d3c6}
+.uv-panel{right:12px;bottom:12px;display:none;flex-direction:column}
+#uvc{display:block;width:256px;height:256px;cursor:default;background:#222}
+
+/* ---------- drop hint ---------- */
+#drop{position:fixed;inset:0;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;
+  pointer-events:none;text-align:center;color:var(--mut);z-index:1;transition:background .15s,color .15s}
+#drop>.mdi{font-size:72px;color:#e0a52655;transition:color .15s,transform .15s}
+#drop b{font-size:17px;color:var(--fg);font-weight:600}
+#drop small{font-size:12px;letter-spacing:.4px}
 #drop.h{display:none}
-#drop.over{background:#e0a52633;opacity:1}
+#drop.over{background:#e0a5261a;color:var(--fg)}
+#drop.over>.mdi{color:var(--ac);transform:scale(1.08)}
+@media (max-width:640px){.brand small,.chip span,.btn span{display:none}.bar{gap:4px}}
 </style>
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div class="bar">
-  <label class="b">Open .nif / textures<input id="file" type="file" accept=".nif,.dds,.png,.jpg,.jpeg,.webp" multiple hidden></label>
-  <label class="c"><input id="wire" type="checkbox" checked> Wireframe</label>
-  <label class="c"><input id="solid" type="checkbox" checked> Solid</label>
-  <label class="c"><input id="tex" type="checkbox" checked> Textures</label>
-  <label class="c"><input id="flipv" type="checkbox"> Flip V</label>
-  <button id="reset">Reset camera</button>
-</div>
-<div id="info">No model loaded</div>
-<canvas id="uvc" width="256" height="256"></canvas>
-<div id="drop">Drag a .nif here (along with the .dds files if you want textures)<br><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
+<header class="bar">
+  <div class="brand"><i class="mdi mdi-cube-scan"></i><span><b>NIF Viewer</b><small>Fallout: New Vegas</small></span></div>
+  <div class="sep"></div>
+  <label class="btn" title="Open .nif and textures (O)"><i class="mdi mdi-folder-open-outline"></i><span>Open</span><input id="file" type="file" accept=".nif,.dds,.png,.jpg,.jpeg,.webp" multiple hidden></label>
+  <div class="sep"></div>
+  <label class="chip" title="Wireframe (W)"><input id="wire" type="checkbox" checked><i class="mdi mdi-vector-line"></i><span>Wireframe</span></label>
+  <label class="chip" title="Solid shading (S)"><input id="solid" type="checkbox" checked><i class="mdi mdi-cube-outline"></i><span>Solid</span></label>
+  <label class="chip" title="Textures (T)"><input id="tex" type="checkbox" checked><i class="mdi mdi-texture-box"></i><span>Textures</span></label>
+  <label class="chip" title="Flip V coordinate (F)"><input id="flipv" type="checkbox"><i class="mdi mdi-flip-vertical"></i><span>Flip V</span></label>
+  <label class="chip" title="UV overlay (U)"><input id="uv" type="checkbox" checked><i class="mdi mdi-grid"></i><span>UV</span></label>
+  <div class="sep"></div>
+  <button class="btn ghost" id="reset" title="Reset camera (R)"><i class="mdi mdi-camera-retro"></i><span>Reset</span></button>
+</header>
+<aside class="panel info-panel">
+  <div class="ph"><i class="mdi mdi-information-outline"></i>Model info</div>
+  <pre id="info">No model loaded</pre>
+</aside>
+<aside class="panel uv-panel" id="uvp">
+  <div class="ph"><i class="mdi mdi-grid"></i>UV map</div>
+  <canvas id="uvc" width="256" height="256"></canvas>
+</aside>
+<div id="drop"><i class="mdi mdi-cube-outline"></i><b>Drag a .nif here</b><small>Add the .dds files too if you want textures</small><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
 
 <script>
 // ---------- NIF parser (FNV: v20.2.0.7, user 11, BS 34) ----------
@@ -284,8 +336,10 @@ function frame() {
 // ---------- Input ----------
 let cur = null;
 function drawUV() {
-  const r = cur, c = $('uvc'); if (!r) return; const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = r.groups.find(q => imgs.has(q.tex));
-  c.style.display = 'block'; g.fillStyle = '#222'; g.fillRect(0, 0, S, S); if (q) g.drawImage(imgs.get(q.tex), 0, 0, S, S);
+  const r = cur, c = $('uvc'), p = $('uvp'); if (!r) return;
+  p.style.display = $('uv').checked ? 'flex' : 'none';
+  const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = r.groups.find(q => imgs.has(q.tex));
+  g.fillStyle = '#222'; g.fillRect(0, 0, S, S); if (q) g.drawImage(imgs.get(q.tex), 0, 0, S, S);
   g.strokeStyle = 'rgba(255,170,0,.9)'; g.lineWidth = 1;
   for (let k = 0; k < r.idx.length; k += 3) { g.beginPath(); for (let j = 0; j < 3; j++) { const a = r.idx[k + j] * 8 + 6, v = r.verts[a + 1], x = r.verts[a] * S, y = (fl ? 1 - v : v) * S; j ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.stroke(); }
 }
@@ -309,6 +363,14 @@ async function loadFiles(fl) {
 }
 $('file').onchange = e => loadFiles(e.target.files);
 $('reset').onclick = resetCam;
+$('uv').onchange = drawUV;
+addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', f: 'flipv', u: 'uv' };
+  if (map[k]) { const el = $(map[k]); el.checked = !el.checked; el.dispatchEvent(new Event('change')); }
+  else if (k === 'r') resetCam();
+  else if (k === 'o') $('file').click();
+});
 addEventListener('dragover', e => { e.preventDefault(); $('drop').classList.add('over'); });
 addEventListener('dragleave', () => $('drop').classList.remove('over'));
 addEventListener('drop', e => { e.preventDefault(); $('drop').classList.remove('over'); loadFiles(e.dataTransfer.files); });
