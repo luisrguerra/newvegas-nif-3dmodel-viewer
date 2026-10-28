@@ -67,7 +67,27 @@ canvas#cv:active{cursor:grabbing}
 #drop.h{display:none}
 #drop.over{background:#e0a5261a;color:var(--fg)}
 #drop.over>.mdi{color:var(--ac);transform:scale(1.08)}
-@media (max-width:640px){.brand small,.chip span,.btn span{display:none}.bar{gap:4px}}
+/* ---------- improver ---------- */
+.imp-panel{left:12px;top:70px;width:242px;max-height:calc(100vh - 340px);display:none;flex-direction:column}
+.imp-body{padding:10px 11px;display:flex;flex-direction:column;gap:9px;overflow:auto}
+.imp-body .row{display:flex;flex-direction:column;gap:5px;font:600 10.5px system-ui,sans-serif;letter-spacing:.7px;text-transform:uppercase;color:var(--mut)}
+.imp-body .row .t{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.imp-body .row b{color:var(--ac2);font-variant-numeric:tabular-nums;letter-spacing:0}
+.imp-body select{width:100%;padding:5px 7px;border-radius:7px;border:1px solid var(--bd2);background:#0e1014;color:var(--fg);font:12.5px system-ui,sans-serif}
+.imp-body select:focus-visible{outline:2px solid var(--ac2);outline-offset:1px}
+.imp-body input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:transparent;cursor:pointer;margin:0}
+.imp-body input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:#333a45}
+.imp-body input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;margin-top:-4.5px;border-radius:50%;background:var(--ac);border:0}
+.imp-body input[type=range]:disabled::-webkit-slider-thumb{background:#555c66}
+.imp-body input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:#333a45}
+.imp-body input[type=range]::-moz-range-thumb{width:13px;height:13px;border:0;border-radius:50%;background:var(--ac)}
+.imp-stat{padding:7px 9px;border-radius:8px;background:#ffffff08;border:1px solid var(--bd);font:11.5px/1.55 ui-monospace,monospace;color:#d7d3c6;white-space:pre-line}
+.imp-stat b{color:var(--ac2)}
+.imp-btns{display:flex;gap:6px}
+.imp-btns .btn{flex:1;justify-content:center;padding:6px 8px}
+.imp-hint{font:11px/1.45 system-ui,sans-serif;color:var(--mut)}
+.imp-hint code{font:11px ui-monospace,monospace;color:var(--ac2)}
+@media (max-width:640px){.brand small,.chip span,.btn span{display:none}.bar{gap:4px}.imp-panel{width:190px}}
 </style>
 </head>
 <body>
@@ -84,8 +104,36 @@ canvas#cv:active{cursor:grabbing}
   <label class="chip" title="Flip V coordinate (F)"><input id="flipv" type="checkbox"><i class="mdi mdi-flip-vertical"></i><span>Flip V</span></label>
   <label class="chip" title="UV overlay (U)"><input id="uv" type="checkbox" checked><i class="mdi mdi-grid"></i><span>UV</span></label>
   <div class="sep"></div>
+  <label class="chip" title="Improve model — subdivision (I)"><input id="impen" type="checkbox"><i class="mdi mdi-auto-fix"></i><span>Improve</span></label>
   <button class="btn ghost" id="reset" title="Reset camera (R)"><i class="mdi mdi-camera-retro"></i><span>Reset</span></button>
 </header>
+<aside class="panel imp-panel" id="impp">
+  <div class="ph"><i class="mdi mdi-auto-fix"></i>Model improver</div>
+  <div class="imp-body">
+    <div class="row"><div class="t"><span>Algorithm</span></div>
+      <select id="alg" title="Surface reconstruction algorithm">
+        <option value="loop">Loop — smooth</option>
+        <option value="pn">Curved PN — by normals</option>
+        <option value="linear">Linear — densify only</option>
+      </select>
+    </div>
+    <div class="row"><div class="t"><span>Level</span><b id="lvlt">×4</b></div><input id="lvl" type="range" min="1" max="3" step="1" value="1"></div>
+    <div class="row"><div class="t"><span>Smoothing</span><b id="smot">100%</b></div><input id="smo" type="range" min="0" max="100" step="5" value="100"></div>
+    <div class="row"><div class="t"><span>Crease angle</span><b id="crt">60°</b></div><input id="cre" type="range" min="0" max="180" step="5" value="60"></div>
+    <div class="row"><div class="t"><span>Normals</span></div>
+      <select id="impnrm">
+        <option value="inherit">Inherited (keeps hard edges)</option>
+        <option value="smooth">Recalculated (all smooth)</option>
+      </select>
+    </div>
+    <div class="imp-stat" id="impstat">No model loaded</div>
+    <div class="imp-btns">
+      <button class="btn" id="impsave" title="Save the displayed model as Wavefront OBJ + MTL"><i class="mdi mdi-content-save-outline"></i><span>Save .obj</span></button>
+      <button class="btn ghost" id="impstl" title="Save the displayed model as binary STL"><i class="mdi mdi-printer-3d"></i><span>.stl</span></button>
+    </div>
+    <div class="imp-hint" id="imphint">Toggle <code>Improve</code> to compare.</div>
+  </div>
+</aside>
 <aside class="panel info-panel">
   <div class="ph"><i class="mdi mdi-information-outline"></i>Model info</div>
   <pre id="info">No model loaded</pre>
@@ -291,6 +339,504 @@ function resize() {
 }
 function mkBuf(data, usage) { const b = dev.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | GPUBufferUsage.COPY_DST }); dev.queue.writeBuffer(b, 0, data); return b; }
 
+// ---------- Mesh improver ----------
+// Three surface-reconstruction strategies, all preserving the original texture mapping:
+//   loop   — Loop subdivision (Warren's rules) with crease/boundary detection and a smoothing blend,
+//            so hard edges, UV seams and open borders survive the refinement.
+//   pn     — Curved PN-triangle tessellation (Vlachos et al.): a cubic Bezier patch whose control
+//            points come from the vertex normals, re-evaluating the surface at each new point.
+//   linear — Plain barycentric densification: same topology growth, geometry stays on the source faces.
+const IMP = { en: false, alg: 'loop', lvl: 1, smo: 100, cre: 60, nrm: 'inherit', src: null, last: null, timer: 0, ms: 0, note: '' };
+const IMP_CAP = 700000; // max triangles the improver will generate
+
+const faceNrm = (P, T, f, out) => {
+  const a = T[f * 3] * 3, b = T[f * 3 + 1] * 3, c = T[f * 3 + 2] * 3;
+  const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+  const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz);
+  if (!l) { out[0] = out[1] = out[2] = 0; return out; }
+  out[0] = nx / l; out[1] = ny / l; out[2] = nz / l; return out;
+};
+const nrm3 = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+// Interpolating opposing corner normals can cancel out; fall back to the face normal so the
+// shader never receives a zero-length normal (which would render as a black facet).
+const nrmOr = (x, y, z, fb) => { const l = Math.hypot(x, y, z); return l > 1e-6 ? [x / l, y / l, z / l] : fb; };
+
+// Loop refinement. Surfaces carry per-vertex positions/normals and per-corner UVs/normals,
+// which keeps seams and hard edges independent while the geometry is refined.
+function subdivLoop(S, smoothK, cosThr) {
+  const { p: P, t: T, cuv: CU, cn: CN } = S;
+  const nt = T.length / 3, nvp = P.length / 3;
+
+  const em = new Map(), ef0 = [], ef1 = [], eid = new Int32Array(nt * 3);
+  for (let f = 0; f < nt; f++) {
+    for (let e = 0; e < 3; e++) {
+      const a = T[f * 3 + e], b = T[f * 3 + (e + 1) % 3];
+      const key = a < b ? a * nvp + b : b * nvp + a;
+      let id = em.get(key);
+      if (id === undefined) { id = ef0.length; em.set(key, id); ef0.push(f); ef1.push(-1); }
+      else if (ef1[id] < 0) ef1[id] = f;
+      eid[f * 3 + e] = id;
+    }
+  }
+  const E = ef0.length;
+
+  // 0 = smooth, 1 = crease, 2 = boundary
+  const FN = new Float32Array(nt * 3), tmp = [0, 0, 0];
+  for (let f = 0; f < nt; f++) { faceNrm(P, T, f, tmp); FN[f * 3] = tmp[0]; FN[f * 3 + 1] = tmp[1]; FN[f * 3 + 2] = tmp[2]; }
+  const flag = new Uint8Array(E), useam = new Uint8Array(E);
+  for (let j = 0; j < E; j++) {
+    const f0 = ef0[j], f1 = ef1[j];
+    if (f1 < 0) { flag[j] = 2; continue; }
+    if (FN[f0 * 3] * FN[f1 * 3] + FN[f0 * 3 + 1] * FN[f1 * 3 + 1] + FN[f0 * 3 + 2] * FN[f1 * 3 + 2] < cosThr) { flag[j] = 1; continue; }
+    // Smooth geometry, but the two faces may still live in different UV islands:
+    // keep the surface continuous while averaging UVs only inside an island.
+    let e = 0; while (eid[f0 * 3 + e] !== j) e++;
+    let e2 = 0; while (eid[f1 * 3 + e2] !== j) e2++;
+    const a = T[f0 * 3 + e], b = T[f0 * 3 + (e + 1) % 3], a2 = T[f1 * 3 + e2];
+    const ca0 = f0 * 3 + e, cb0 = f0 * 3 + (e + 1) % 3;
+    const ca1 = a2 === a ? f1 * 3 + e2 : f1 * 3 + (e2 + 1) % 3;
+    const cb1 = a2 === b ? f1 * 3 + e2 : f1 * 3 + (e2 + 1) % 3;
+    const same = (i, k) => Math.abs(CU[i * 2] - CU[k * 2]) < 1e-5 && Math.abs(CU[i * 2 + 1] - CU[k * 2 + 1]) < 1e-5;
+    if (!(same(ca0, ca1) && same(cb0, cb1))) useam[j] = 1;
+  }
+
+  // vertex neighbourhoods (neighbour sum, crease neighbours)
+  const nsum = new Float32Array(nvp * 3), ncnt = new Uint32Array(nvp);
+  const ncre = new Uint32Array(nvp), crn = new Int32Array(nvp * 2);
+  for (let j = 0; j < E; j++) {
+    const f0 = ef0[j]; let e = 0; while (eid[f0 * 3 + e] !== j) e++;
+    const a = T[f0 * 3 + e], b = T[f0 * 3 + (e + 1) % 3], fl = flag[j];
+    for (let q = 0; q < 2; q++) {
+      const u = q ? b : a, v = q ? a : b;
+      nsum[u * 3] += P[v * 3]; nsum[u * 3 + 1] += P[v * 3 + 1]; nsum[u * 3 + 2] += P[v * 3 + 2]; ncnt[u]++;
+      if (fl) { if (ncre[u] < 2) crn[u * 2 + ncre[u]] = v; ncre[u]++; }
+    }
+  }
+
+  const nv2 = nvp + E + nt, P2 = new Float32Array(nv2 * 3), N2 = new Float32Array(nv2 * 3);
+  // old vertices
+  for (let v = 0; v < nvp; v++) {
+    const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+    let sx = x, sy = y, sz = z;
+    if (ncre[v] === 2) {
+      // Exactly two crease/boundary edges: smooth along that curve (Hoppe's rule) so open borders
+      // and crease lines stop looking like a staircase. A crease that turns sharply is a real
+      // corner, so it keeps its position instead of being rounded away.
+      const a = crn[v * 2] * 3, b = crn[v * 2 + 1] * 3;
+      const eax = P[a] - x, eay = P[a + 1] - y, eaz = P[a + 2] - z;
+      const ebx = P[b] - x, eby = P[b + 1] - y, ebz = P[b + 2] - z;
+      const la = Math.hypot(eax, eay, eaz) || 1, lb = Math.hypot(ebx, eby, ebz) || 1;
+      if ((eax * ebx + eay * eby + eaz * ebz) / (la * lb) < -0.5) {
+        sx = 0.75 * x + 0.125 * (P[a] + P[b]); sy = 0.75 * y + 0.125 * (P[a + 1] + P[b + 1]); sz = 0.75 * z + 0.125 * (P[a + 2] + P[b + 2]);
+      }
+    } else if (ncre[v] === 0 && ncnt[v] > 0) {
+      const n = ncnt[v], beta = n > 3 ? 3 / (8 * n) : 3 / 16, w = 1 - n * beta;
+      sx = w * x + beta * nsum[v * 3]; sy = w * y + beta * nsum[v * 3 + 1]; sz = w * z + beta * nsum[v * 3 + 2];
+    }
+    P2[v * 3] = x + (sx - x) * smoothK; P2[v * 3 + 1] = y + (sy - y) * smoothK; P2[v * 3 + 2] = z + (sz - z) * smoothK;
+  }
+  // edge vertices
+  for (let j = 0; j < E; j++) {
+    const f0 = ef0[j], f1 = ef1[j]; let e = 0; while (eid[f0 * 3 + e] !== j) e++;
+    const a = T[f0 * 3 + e] * 3, b = T[f0 * 3 + (e + 1) % 3] * 3;
+    let mx = 0.5 * (P[a] + P[b]), my = 0.5 * (P[a + 1] + P[b + 1]), mz = 0.5 * (P[a + 2] + P[b + 2]);
+    if (flag[j] === 0 && f1 >= 0) {
+      const o0 = T[f0 * 3 + (e + 2) % 3] * 3;
+      let e2 = 0; while (eid[f1 * 3 + e2] !== j) e2++;
+      const o1 = T[f1 * 3 + (e2 + 2) % 3] * 3;
+      const lx = 0.375 * (P[a] + P[b]) + 0.125 * (P[o0] + P[o1]);
+      const ly = 0.375 * (P[a + 1] + P[b + 1]) + 0.125 * (P[o0 + 1] + P[o1 + 1]);
+      const lz = 0.375 * (P[a + 2] + P[b + 2]) + 0.125 * (P[o0 + 2] + P[o1 + 2]);
+      mx += (lx - mx) * smoothK; my += (ly - my) * smoothK; mz += (lz - mz) * smoothK;
+    }
+    const o = (nvp + j) * 3; P2[o] = mx; P2[o + 1] = my; P2[o + 2] = mz;
+  }
+  // face vertices
+  for (let f = 0; f < nt; f++) {
+    const a = T[f * 3] * 3, b = T[f * 3 + 1] * 3, c = T[f * 3 + 2] * 3, o = (nvp + E + f) * 3;
+    P2[o] = (P[a] + P[b] + P[c]) / 3; P2[o + 1] = (P[a + 1] + P[b + 1] + P[c + 1]) / 3; P2[o + 2] = (P[a + 2] + P[b + 2] + P[c + 2]) / 3;
+  }
+
+  // per-corner UVs and normals for the edge midpoints
+  const emap = new Int32Array(nt * 4), euv = new Float32Array(nt * 6), env = new Float32Array(nt * 9);
+  for (let f = 0; f < nt; f++) for (let e = 0; e < 3; e++) emap[f * 4 + e] = eid[f * 3 + e];
+  for (let j = 0; j < E; j++) {
+    const f0 = ef0[j], f1 = ef1[j], smG = flag[j] === 0 && f1 >= 0, smU = smG && !useam[j];
+    for (let q = 0; q < 2; q++) {
+      const f = q ? f1 : f0; if (f < 0) continue;
+      let e = 0; while (emap[f * 4 + e] !== j) e++;
+      const ca = f * 3 + e, cb = f * 3 + (e + 1) % 3, cc = f * 3 + (e + 2) % 3;
+      let co = -1;
+      if (smG) { const g2 = q ? f0 : f1; let e2 = 0; while (emap[g2 * 4 + e2] !== j) e2++; co = g2 * 3 + (e2 + 2) % 3; }
+      const k0 = smU ? 0.375 : 0.5, k1 = smU ? 0.125 : 0;
+      euv[ca * 2] = k0 * (CU[ca * 2] + CU[cb * 2]) + k1 * (CU[cc * 2] + (co >= 0 && smU ? CU[co * 2] : 0));
+      euv[ca * 2 + 1] = k0 * (CU[ca * 2 + 1] + CU[cb * 2 + 1]) + k1 * (CU[cc * 2 + 1] + (co >= 0 && smU ? CU[co * 2 + 1] : 0));
+      const kk0 = smG ? 0.375 : 0.5, kk1 = smG ? 0.125 : 0;
+      const n = nrmOr(kk0 * (CN[ca * 3] + CN[cb * 3]) + kk1 * (CN[cc * 3] + (co >= 0 ? CN[co * 3] : 0)),
+                      kk0 * (CN[ca * 3 + 1] + CN[cb * 3 + 1]) + kk1 * (CN[cc * 3 + 1] + (co >= 0 ? CN[co * 3 + 1] : 0)),
+                      kk0 * (CN[ca * 3 + 2] + CN[cb * 3 + 2]) + kk1 * (CN[cc * 3 + 2] + (co >= 0 ? CN[co * 3 + 2] : 0)),
+                      nrm3(CN[ca * 3] + CN[cb * 3], CN[ca * 3 + 1] + CN[cb * 3 + 1], CN[ca * 3 + 2] + CN[cb * 3 + 2]));
+      env[ca * 3] = n[0]; env[ca * 3 + 1] = n[1]; env[ca * 3 + 2] = n[2];
+    }
+  }
+
+  // four child triangles per parent face
+  const T2 = new Uint32Array(nt * 12), CU2 = new Float32Array(nt * 24), CN2 = new Float32Array(nt * 36);
+  const CHILD = [[0, 3, 5], [1, 4, 3], [2, 5, 4], [3, 4, 5]];
+  let o = 0;
+  for (let f = 0; f < nt; f++) {
+    const c0 = f * 3, c1 = c0 + 1, c2 = c0 + 2;
+    const ids = [T[c0], T[c1], T[c2],
+      nvp + emap[f * 4], nvp + emap[f * 4 + 1], nvp + emap[f * 4 + 2],
+      nvp + E + f];
+    const uv = [[CU[c0 * 2], CU[c0 * 2 + 1]], [CU[c1 * 2], CU[c1 * 2 + 1]], [CU[c2 * 2], CU[c2 * 2 + 1]],
+      [euv[c0 * 2], euv[c0 * 2 + 1]], [euv[c1 * 2], euv[c1 * 2 + 1]], [euv[c2 * 2], euv[c2 * 2 + 1]],
+      [(CU[c0 * 2] + CU[c1 * 2] + CU[c2 * 2]) / 3, (CU[c0 * 2 + 1] + CU[c1 * 2 + 1] + CU[c2 * 2 + 1]) / 3]];
+    const nm = [nrm3(CN[c0 * 3], CN[c0 * 3 + 1], CN[c0 * 3 + 2]), nrm3(CN[c1 * 3], CN[c1 * 3 + 1], CN[c1 * 3 + 2]),
+      nrm3(CN[c2 * 3], CN[c2 * 3 + 1], CN[c2 * 3 + 2]), [env[c0 * 3], env[c0 * 3 + 1], env[c0 * 3 + 2]],
+      [env[c1 * 3], env[c1 * 3 + 1], env[c1 * 3 + 2]], [env[c2 * 3], env[c2 * 3 + 1], env[c2 * 3 + 2]],
+      nrmOr(CN[c0 * 3] + CN[c1 * 3] + CN[c2 * 3], CN[c0 * 3 + 1] + CN[c1 * 3 + 1] + CN[c2 * 3 + 1], CN[c0 * 3 + 2] + CN[c1 * 3 + 2] + CN[c2 * 3 + 2],
+        nrm3(CN[c0 * 3], CN[c0 * 3 + 1], CN[c0 * 3 + 2]))];
+    for (const tri of CHILD) for (const q of tri) {
+      T2[o] = ids[q]; CU2[o * 2] = uv[q][0]; CU2[o * 2 + 1] = uv[q][1];
+      CN2[o * 3] = nm[q][0]; CN2[o * 3 + 1] = nm[q][1]; CN2[o * 3 + 2] = nm[q][2]; o++;
+    }
+  }
+  // vertex normals of the refined surface, accumulated from the child faces
+  const vn = [0, 0, 0];
+  for (let f = 0; f < nt * 4; f++) {
+    faceNrm(P2, T2, f, vn);
+    if (!vn[0] && !vn[1] && !vn[2]) continue;
+    for (let k = 0; k < 3; k++) { const v = T2[f * 3 + k] * 3; N2[v] += vn[0]; N2[v + 1] += vn[1]; N2[v + 2] += vn[2]; }
+  }
+  for (let v = 0; v < nv2; v++) {
+    const n = nrm3(N2[v * 3], N2[v * 3 + 1], N2[v * 3 + 2]);
+    N2[v * 3] = n[0]; N2[v * 3 + 1] = n[1]; N2[v * 3 + 2] = n[2];
+  }
+  if (IMP.nrm === 'smooth') {
+    const nc = nt * 12;
+    for (let c = 0; c < nc; c++) { const v = T2[c] * 3; CN2[c * 3] = N2[v]; CN2[c * 3 + 1] = N2[v + 1]; CN2[c * 3 + 2] = N2[v + 2]; }
+  }
+  // Last resort: a corner whose normal cancelled out (or whose vertex is unreferenced) takes the
+  // geometric normal of its own child triangle, so the shader never sees a zero-length normal.
+  for (let f = 0; f < nt * 4; f++) {
+    faceNrm(P2, T2, f, vn);
+    if (!vn[0] && !vn[1] && !vn[2]) continue;
+    for (let k = 0; k < 3; k++) {
+      const c = f * 3 + k;
+      if (Math.hypot(CN2[c * 3], CN2[c * 3 + 1], CN2[c * 3 + 2]) > 0.5) continue;
+      CN2[c * 3] = vn[0]; CN2[c * 3 + 1] = vn[1]; CN2[c * 3 + 2] = vn[2];
+    }
+  }
+  return { p: P2, n: N2, t: T2, cuv: CU2, cn: CN2 };
+}
+
+// Curved PN triangles (Vlachos / Peters / Boyd) and linear densification.
+function pnPatch(A, B, C, NA, NB, NC) {
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const AB = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], BC = [C[0] - B[0], C[1] - B[1], C[2] - B[2]], CA = [A[0] - C[0], A[1] - C[1], A[2] - C[2]];
+  const dAB = dot(AB, NA), dBC = dot(BC, NB), dCA = dot(CA, NC);
+  const b210 = [(2 * A[0] + B[0] - dAB * NA[0]) / 3, (2 * A[1] + B[1] - dAB * NA[1]) / 3, (2 * A[2] + B[2] - dAB * NA[2]) / 3];
+  // The tangent at the far end of an edge points back towards the near end, so the projection
+  // term flips sign there: b120/b012/b201 add it, b210/b021/b102 subtract it.
+  const b120 = [(2 * B[0] + A[0] + dAB * NB[0]) / 3, (2 * B[1] + A[1] + dAB * NB[1]) / 3, (2 * B[2] + A[2] + dAB * NB[2]) / 3];
+  const b021 = [(2 * B[0] + C[0] - dBC * NB[0]) / 3, (2 * B[1] + C[1] - dBC * NB[1]) / 3, (2 * B[2] + C[2] - dBC * NB[2]) / 3];
+  const b012 = [(2 * C[0] + B[0] + dBC * NC[0]) / 3, (2 * C[1] + B[1] + dBC * NC[1]) / 3, (2 * C[2] + B[2] + dBC * NC[2]) / 3];
+  const b102 = [(2 * C[0] + A[0] - dCA * NC[0]) / 3, (2 * C[1] + A[1] - dCA * NC[1]) / 3, (2 * C[2] + A[2] - dCA * NC[2]) / 3];
+  const b201 = [(2 * A[0] + C[0] + dCA * NA[0]) / 3, (2 * A[1] + C[1] + dCA * NA[1]) / 3, (2 * A[2] + C[2] + dCA * NA[2]) / 3];
+  const b111 = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    const E = (b210[i] + b120[i] + b021[i] + b012[i] + b102[i] + b201[i]) / 6, V = (A[i] + B[i] + C[i]) / 3;
+    b111[i] = 1.5 * E - 0.5 * V;
+  }
+  return [A, B, C, b210, b120, b021, b012, b102, b201, b111];
+}
+function pnEval(c, w, u, v) {
+  const w3 = w * w * w, u3 = u * u * u, v3 = v * v * v, wu = w * u, wv = w * v, uv = u * v;
+  const k = [w3, u3, v3, 3 * wu * w, 3 * wu * u, 3 * uv * u, 3 * uv * v, 3 * wv * v, 3 * wv * w, 6 * wu * v];
+  const o = [0, 0, 0];
+  for (let i = 0; i < 10; i++) for (let a = 0; a < 3; a++) o[a] += k[i] * c[i][a];
+  return o;
+}
+function tessellate(S, level, curved, smoothK = 1, cosThr = -1) {
+  const { p: P, t: T, cuv: CU, cn: CN } = S, nt = T.length / 3, step = 1 << level;
+  const nSub = step * step, nGrid = (step + 1) * (step + 2) / 2;
+  const V = new Float32Array(nt * nGrid * 8), I = new Uint32Array(nt * nSub * 3);
+  let vo = 0, io = 0;
+  const put = (pos, nrm, u, v) => {
+    V[vo] = pos[0]; V[vo + 1] = pos[1]; V[vo + 2] = pos[2];
+    V[vo + 3] = nrm[0]; V[vo + 4] = nrm[1]; V[vo + 5] = nrm[2];
+    V[vo + 6] = u; V[vo + 7] = v; vo += 8;
+  };
+  for (let f = 0; f < nt; f++) {
+    const ia = T[f * 3] * 3, ib = T[f * 3 + 1] * 3, ic = T[f * 3 + 2] * 3;
+    const A = [P[ia], P[ia + 1], P[ia + 2]], B = [P[ib], P[ib + 1], P[ib + 2]], C = [P[ic], P[ic + 1], P[ic + 2]];
+    const k0 = f * 3;
+    const NA = nrm3(CN[k0 * 3], CN[k0 * 3 + 1], CN[k0 * 3 + 2]);
+    const NB = nrm3(CN[(k0 + 1) * 3], CN[(k0 + 1) * 3 + 1], CN[(k0 + 1) * 3 + 2]);
+    const NC = nrm3(CN[(k0 + 2) * 3], CN[(k0 + 2) * 3 + 1], CN[(k0 + 2) * 3 + 2]);
+    const UA = [CU[k0 * 2], CU[k0 * 2 + 1]], UB = [CU[(k0 + 1) * 2], CU[(k0 + 1) * 2 + 1]], UC = [CU[(k0 + 2) * 2], CU[(k0 + 2) * 2 + 1]];
+    // A face whose corner normals disagree with its own normal is a hard edge: keep it flat
+    // instead of letting the Bezier patch round it off.
+    const fn = nrm3((B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]),
+                    (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]),
+                    (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
+    let k = curved ? smoothK : 0;
+    if (k > 0) {
+      const d = n => n[0] * fn[0] + n[1] * fn[1] + n[2] * fn[2];
+      if (d(NA) < cosThr || d(NB) < cosThr || d(NC) < cosThr) k = 0;
+    }
+    const patch = k > 0 ? pnPatch(A, B, C, NA, NB, NC) : null;
+    // One shared vertex per grid point instead of three per triangle: ~6x fewer vertices,
+    // and the shared ones get identical values so each patch stays watertight.
+    const row = new Int32Array((step + 1) * (step + 1));
+    for (let i = 0; i <= step; i++) for (let j = 0; j <= step - i; j++) {
+      const u = i / step, v = j / step, w = 1 - u - v;
+      const lin = [w * A[0] + u * B[0] + v * C[0], w * A[1] + u * B[1] + v * C[1], w * A[2] + u * B[2] + v * C[2]];
+      let pos = lin;
+      if (patch) { const c = pnEval(patch, w, u, v); pos = [lin[0] + (c[0] - lin[0]) * k, lin[1] + (c[1] - lin[1]) * k, lin[2] + (c[2] - lin[2]) * k]; }
+      const nrm = nrmOr(w * NA[0] + u * NB[0] + v * NC[0], w * NA[1] + u * NB[1] + v * NC[1], w * NA[2] + u * NB[2] + v * NC[2], fn);
+      row[i * (step + 1) + j] = vo / 8;
+      put(pos, nrm, w * UA[0] + u * UB[0] + v * UC[0], w * UA[1] + u * UB[1] + v * UC[1]);
+    }
+    const g = (i, j) => row[i * (step + 1) + j];
+    for (let i = 0; i < step; i++) for (let j = 0; j < step - i; j++) {
+      I[io++] = g(i, j); I[io++] = g(i + 1, j); I[io++] = g(i, j + 1);
+      if (i + j < step - 1) { I[io++] = g(i + 1, j); I[io++] = g(i + 1, j + 1); I[io++] = g(i, j + 1); }
+    }
+  }
+  return { V: V.subarray(0, vo), I: I.subarray(0, io) };
+}
+
+// Rebuilds the parsed model as a list of parts (interleaved vertices + index) per texture group.
+function improverSource(r) {
+  const V = r.verts, n = r.nv;
+  const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3);
+  let ext = 0;
+  for (let i = 0; i < n; i++) {
+    const x = V[i * 8], y = V[i * 8 + 1], z = V[i * 8 + 2];
+    pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+    ext = Math.max(ext, Math.abs(x), Math.abs(y), Math.abs(z));
+    const a = V[i * 8 + 3], b = V[i * 8 + 4], c = V[i * 8 + 5], l = Math.hypot(a, b, c);
+    if (l > 1e-12) { nrm[i * 3] = a / l; nrm[i * 3 + 1] = b / l; nrm[i * 3 + 2] = c / l; } else nrm[i * 3 + 1] = 1;
+  }
+  const q = 1 / Math.max(1e-7, ext * 2e-5), groups = [];
+  for (const g of r.groups) {
+    if (g.c < 3) continue;
+    // Weld the vertices that the NIF split for UV seams / hard edges so the surface is
+    // topologically closed, but never merge across a hard edge (corners keep their normal)
+    // and never merge across meshes — two separate parts may touch without being connected.
+    const wm = new Map(), rm = new Uint32Array(g.c), wp = [], wn = [];
+    const T = new Uint32Array(g.c), CU = new Float32Array(g.c * 2), CN = new Float32Array(g.c * 3);
+    for (let j = 0; j < g.c; j++) {
+      const vi = r.idx[g.s + j];
+      const key = Math.round(pos[vi * 3] * q) + ',' + Math.round(pos[vi * 3 + 1] * q) + ',' + Math.round(pos[vi * 3 + 2] * q) +
+        ',' + Math.round(nrm[vi * 3] * 40) + ',' + Math.round(nrm[vi * 3 + 1] * 40) + ',' + Math.round(nrm[vi * 3 + 2] * 40);
+      let id = wm.get(key);
+      if (id === undefined) {
+        id = wp.length / 3; wm.set(key, id);
+        wp.push(pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
+        wn.push(nrm[vi * 3], nrm[vi * 3 + 1], nrm[vi * 3 + 2]);
+      }
+      rm[j] = id;
+      T[j] = id;
+      CU[j * 2] = V[vi * 8 + 6]; CU[j * 2 + 1] = V[vi * 8 + 7];
+      CN[j * 3] = nrm[vi * 3]; CN[j * 3 + 1] = nrm[vi * 3 + 1]; CN[j * 3 + 2] = nrm[vi * 3 + 2];
+    }
+    groups.push({ p: new Float32Array(wp), n: new Float32Array(wn), t: T, cuv: CU, cn: CN, g });
+  }
+  return { groups, ext };
+}
+
+function expandSurface(S) {
+  const nc = S.t.length, Vb = [], I = new Uint32Array(nc), dict = new Map();
+  for (let c = 0; c < nc; c++) {
+    const v = S.t[c];
+    const key = v + '|' + Math.round(S.cuv[c * 2] * 65536) + '|' + Math.round(S.cuv[c * 2 + 1] * 65536) + '|' +
+      Math.round(S.cn[c * 3] * 512) + '|' + Math.round(S.cn[c * 3 + 1] * 512) + '|' + Math.round(S.cn[c * 3 + 2] * 512);
+    let id = dict.get(key);
+    if (id === undefined) {
+      id = Vb.length / 8; dict.set(key, id);
+      Vb.push(S.p[v * 3], S.p[v * 3 + 1], S.p[v * 3 + 2], S.cn[c * 3], S.cn[c * 3 + 1], S.cn[c * 3 + 2], S.cuv[c * 2], S.cuv[c * 2 + 1]);
+    }
+    I[c] = id;
+  }
+  return { V: new Float32Array(Vb), I };
+}
+
+function mergeParts(parts) {
+  let nv = 0, ni = 0;
+  for (const q of parts) { nv += q.V.length / 8; ni += q.I.length; }
+  const verts = new Float32Array(nv * 8), idx = new Uint32Array(ni), groups = [];
+  const mn = [1e30, 1e30, 1e30], mx = [-1e30, -1e30, -1e30];
+  let vo = 0, io = 0;
+  for (const q of parts) {
+    verts.set(q.V, vo * 8);
+    groups.push({ s: io, c: q.I.length, tex: q.g.tex, ntex: q.g.ntex, ref: q.g.ref });
+    for (let k = 0; k < q.I.length; k++) idx[io + k] = q.I[k] + vo;
+    for (let k = 0; k < q.V.length / 8; k++) for (let a = 0; a < 3; a++) { const v = q.V[k * 8 + a]; if (v < mn[a]) mn[a] = v; if (v > mx[a]) mx[a] = v; }
+    vo += q.V.length / 8; io += q.I.length;
+  }
+  return { verts, idx, groups, mn, mx, nv: vo, tris: io / 3, nm: parts.length };
+}
+
+// Area-weighted vertex normals written back into an interleaved position/normal/uv buffer.
+function recomputeNormals(V, I) {
+  const nv = V.length / 8, acc = new Float32Array(nv * 3);
+  for (let k = 0; k < I.length; k += 3) {
+    const a = I[k] * 8, b = I[k + 1] * 8, c = I[k + 2] * 8;
+    const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2];
+    const vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+    // Unnormalised cross product => the magnitude is twice the triangle area, which is the
+    // weighting that keeps large faces from being outvoted by slivers.
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    for (const q of [I[k], I[k + 1], I[k + 2]]) { acc[q * 3] += nx; acc[q * 3 + 1] += ny; acc[q * 3 + 2] += nz; }
+  }
+  for (let v = 0; v < nv; v++) {
+    const n = nrm3(acc[v * 3], acc[v * 3 + 1], acc[v * 3 + 2]);
+    V[v * 8 + 3] = n[0]; V[v * 8 + 4] = n[1]; V[v * 8 + 5] = n[2];
+  }
+}
+
+function buildImproved() {
+  const src = IMP.src; if (!src) return null;
+  const t0 = performance.now(), level = IMP.lvl, smoothK = IMP.smo / 100, cosThr = Math.cos(IMP.cre * Math.PI / 180);
+  const parts = [];
+  let capped = false;
+  for (const S of src.groups) {
+    if (!S.t.length) continue;
+    if (IMP.alg === 'loop') {
+      let cur = S;
+      for (let l = 0; l < level; l++) {
+        if (cur.t.length / 3 * 4 > IMP_CAP) { capped = true; break; }
+        cur = subdivLoop(cur, smoothK, cosThr);
+      }
+      parts.push({ ...expandSurface(cur), g: S.g });
+    } else {
+      let step = 1;
+      while (step < (1 << level) && (S.t.length / 3) * (step * 2) * (step * 2) < IMP_CAP) step *= 2;
+      if (step < (1 << level)) capped = true;
+      const p = tessellate(S, Math.log2(step), IMP.alg === 'pn', smoothK, cosThr);
+      if (IMP.nrm === 'smooth') recomputeNormals(p.V, p.I);
+      parts.push({ V: p.V, I: p.I, g: S.g });
+    }
+  }
+  IMP.ms = Math.round(performance.now() - t0);
+  if (!parts.length) return null;
+  IMP.note = capped ? `⚠ Capped at ${IMP_CAP.toLocaleString()} triangles per mesh to keep the viewer responsive` : '';
+  return mergeParts(parts);
+}
+
+function syncImpControls() {
+  // Linear densification ignores smoothing and crease angle, so grey those out instead of
+  // letting the sliders look like they do something.
+  const linear = IMP.alg === 'linear';
+  for (const id of ['smo', 'cre']) {
+    const el = $(id); el.disabled = linear;
+    el.closest('.row').style.opacity = linear ? .45 : 1;
+  }
+}
+
+function improverStats(res) {
+  const el = $('impstat');
+  if (!IMP.src) { el.textContent = 'No model loaded'; return; }
+  const srcTris = IMP.src.groups.reduce((a, s) => a + s.t.length / 3, 0);
+  let s = `Original ${srcTris.toLocaleString()} tris`;
+  if (res && IMP.en) s += `\nImproved ${res.tris.toLocaleString()} tris (×${(res.tris / Math.max(1, srcTris)).toFixed(1)})\n${res.nv.toLocaleString()} verts · ${IMP.ms} ms`;
+  else s += '\nImprove off — showing original';
+  el.textContent = s;
+  $('imphint').textContent = IMP.note || 'Toggle Improve (I) to compare. Save writes the displayed mesh.';
+}
+
+function applyImprove() {
+  if (!IMP.src) return;
+  if (!IMP.en) { setModel(cur, true); IMP.last = cur; improverStats(null); return; }
+  try {
+    const res = buildImproved();
+    if (!res || !res.idx.length) throw new Error('Could not improve the mesh');
+    IMP.last = res; setModel(res, true); improverStats(res);
+  } catch (e) { $('impstat').textContent = 'Error: ' + e.message; console.error(e); }
+}
+function scheduleImprove() {
+  clearTimeout(IMP.timer);
+  $('impstat').textContent = 'Computing…';
+  IMP.timer = setTimeout(() => requestAnimationFrame(applyImprove), 30);
+}
+
+// ---------- Export ----------
+function download(name, data, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type: mime }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+const baseName = () => (cur?.fn || 'model').replace(/\.nif$/i, '');
+const outName = () => baseName() + (IMP.en && IMP.last !== cur ? '_improved' : '');
+const outDesc = () => IMP.en && IMP.last !== cur
+  ? `improver ${IMP.alg} ×${4 ** IMP.lvl}, crease ${IMP.cre}°, smoothing ${IMP.smo}%`
+  : 'original mesh';
+function triGroups(r) {
+  // returns [start, end, group] tri ranges
+  const out = [];
+  for (const g of r.groups) out.push([g.s / 3, (g.s + g.c) / 3, g]);
+  return out;
+}
+function exportOBJ() {
+  const r = IMP.last; if (!r) return;
+  const V = r.verts, uvFlip = $('flipv').checked, out = [], chunk = [];
+  const flush = () => { if (chunk.length) { out.push(chunk.join('\n')); chunk.length = 0; } };
+  const tex = [...new Set(r.groups.map(g => g.tex).filter(Boolean))];
+  const name = outName();
+  out.push(`# ${baseName()} — ${r.tris} triangles, ${r.nv} vertices`);
+  out.push(`# NIF Viewer: ${outDesc()}`);
+  if (tex.length) out.push('mtllib ' + name + '.mtl');
+  for (let i = 0; i < r.nv; i++) {
+    const o = i * 8, v = uvFlip ? 1 - V[o + 7] : V[o + 7];
+    chunk.push(`v ${V[o].toFixed(6)} ${V[o + 1].toFixed(6)} ${V[o + 2].toFixed(6)}`);
+    chunk.push(`vt ${V[o + 6].toFixed(6)} ${v.toFixed(6)}`);
+    chunk.push(`vn ${V[o + 3].toFixed(6)} ${V[o + 4].toFixed(6)} ${V[o + 5].toFixed(6)}`);
+    if (chunk.length > 3000) flush();
+  }
+  flush();
+  let last = '';
+  for (const [a, b, g] of triGroups(r)) {
+    const gname = (g.tex || 'surface').replace(/\s+/g, '_');
+    if (gname !== last) { out.push(`g ${gname}`); out.push(`usemtl ${gname}`); last = gname; }
+    for (let t = a; t < b; t++) {
+      const i0 = r.idx[t * 3] + 1, i1 = r.idx[t * 3 + 1] + 1, i2 = r.idx[t * 3 + 2] + 1;
+      chunk.push(`f ${i0}/${i0}/${i0} ${i1}/${i1}/${i1} ${i2}/${i2}/${i2}`);
+      if (chunk.length > 3000) flush();
+    }
+  }
+  flush();
+  download(name + '.obj', out, 'text/plain');
+  if (tex.length) {
+    const mtl = tex.map(t => `newmtl ${t.replace(/\s+/g, '_')}\nKa 1 1 1\nKd 1 1 1\nKs 0 0 0\nd 1\nillum 1\nmap_Kd ${t}.dds\n`).join('\n');
+    setTimeout(() => download(name + '.mtl', mtl, 'text/plain'), 400);
+  }
+}
+function exportSTL() {
+  const r = IMP.last; if (!r) return;
+  const V = r.verts, I = r.idx, T = I.length / 3;
+  const buf = new ArrayBuffer(84 + T * 50), dv = new DataView(buf);
+  const head = new TextEncoder().encode(`NIF Viewer — ${outDesc()}`).slice(0, 79);
+  new Uint8Array(buf).set(head);
+  dv.setUint32(80, T, true);
+  let o = 84;
+  for (let t = 0; t < T; t++) {
+    const a = I[t * 3] * 8, b = I[t * 3 + 1] * 8, c = I[t * 3 + 2] * 8;
+    const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2];
+    const vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+    const n = nrm3(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    dv.setFloat32(o, n[0], true); dv.setFloat32(o + 4, n[1], true); dv.setFloat32(o + 8, n[2], true);
+    for (const q of [a, b, c]) { dv.setFloat32(o + 12, V[q], true); dv.setFloat32(o + 16, V[q + 1], true); dv.setFloat32(o + 20, V[q + 2], true); o += 12; }
+    o += 14;
+  }
+  download(outName() + '.stl', buf, 'model/stl');
+}
+
 const lib = new Map(), imgs = new Map(); // texture name (without extension) -> GPUTexture
 function mkTex(w, h, data) {
   const t = dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
@@ -330,13 +876,14 @@ async function loadTex(f) {
 function mkGroup(g) {
   const t = lib.get(g.tex), nt = lib.get(g.ntex) || (g.tex ? lib.get(g.tex + '_n') : undefined), ub = dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   dev.queue.writeBuffer(ub, 0, new Float32Array([g.ref, t ? 1 : 0, nt ? 1 : 0, 0]));
-  return { s: g.s, c: g.c, bg: dev.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: (t || white).createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: ub } }, { binding: 3, resource: (nt || flatN).createView() }] }) };
+  return { s: g.s, c: g.c, ub, bg: dev.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: (t || white).createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: ub } }, { binding: 3, resource: (nt || flatN).createView() }] }) };
 }
 function setModel(r, keep) {
-  geo?.vb.destroy(); geo?.ib.destroy(); geo?.lb.destroy();
+  geo?.vb.destroy(); geo?.ib.destroy(); geo?.lb.destroy(); geo?.ubs?.forEach(b => b.destroy());
   const L = new Uint32Array(r.idx.length * 2);
   for (let k = 0; k < r.idx.length; k += 3) { L.set([r.idx[k], r.idx[k+1], r.idx[k+1], r.idx[k+2], r.idx[k+2], r.idx[k]], k * 2); }
-  geo = { vb: mkBuf(r.verts, GPUBufferUsage.VERTEX), ib: mkBuf(r.idx, GPUBufferUsage.INDEX), lb: mkBuf(L, GPUBufferUsage.INDEX), ni: r.idx.length, nl: L.length, g: r.groups.map(mkGroup) };
+  const g = r.groups.map(mkGroup);
+  geo = { vb: mkBuf(r.verts, GPUBufferUsage.VERTEX), ib: mkBuf(r.idx, GPUBufferUsage.INDEX), lb: mkBuf(L, GPUBufferUsage.INDEX), ni: r.idx.length, nl: L.length, g, ubs: g.map(q => q.ub).filter(Boolean) };
   if (keep) return;
   cam.target = r.mn.map((v, i) => (v + r.mx[i]) / 2);
   cam.rad = Math.hypot(...r.mn.map((v, i) => r.mx[i] - v)) / 2 || 1;
@@ -369,12 +916,13 @@ function frame() {
 // ---------- Input ----------
 let cur = null;
 function drawUV() {
-  const r = cur, c = $('uvc'), p = $('uvp'); if (!r) return;
+  const shown = $('impen').checked && IMP.last ? IMP.last : cur, c = $('uvc'), p = $('uvp'); if (!shown) return;
   p.style.display = $('uv').checked ? 'flex' : 'none';
-  const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = r.groups.find(q => imgs.has(q.tex));
+  const g = c.getContext('2d'), S = 256, fl = $('flipv').checked, q = shown.groups.find(q => imgs.has(q.tex));
   g.fillStyle = '#222'; g.fillRect(0, 0, S, S); if (q) g.drawImage(imgs.get(q.tex), 0, 0, S, S);
   g.strokeStyle = 'rgba(255,170,0,.9)'; g.lineWidth = 1;
-  for (let k = 0; k < r.idx.length; k += 3) { g.beginPath(); for (let j = 0; j < 3; j++) { const a = r.idx[k + j] * 8 + 6, v = r.verts[a + 1], x = r.verts[a] * S, y = (fl ? 1 - v : v) * S; j ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.stroke(); }
+  const r = shown, step = Math.max(1, Math.ceil(r.idx.length / 3 / 24000)) * 3;
+  for (let k = 0; k < r.idx.length; k += step) { g.beginPath(); for (let j = 0; j < 3; j++) { const a = r.idx[k + j] * 8 + 6, v = r.verts[a + 1], x = r.verts[a] * S, y = (fl ? 1 - v : v) * S; j ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.stroke(); }
 }
 $('flipv').onchange = drawUV;
 function texList(r) {
@@ -413,8 +961,10 @@ function renderTexPanel() {
 }
 function showInfo(errs = []) {
   const r = cur; if (!r) return;
+  const shown = $('impen').checked && IMP.last ? IMP.last : null;
   const list = texList(r), miss = list.filter(e => !lib.has(e.name));
   info.textContent = `${r.fn}\n${r.line}\nMeshes: ${r.nm}  Vertices: ${r.nv}  Triangles: ${r.tris}` +
+    (shown ? `\n\nImproved (${IMP.alg} ×${4 ** IMP.lvl}): ${shown.tris.toLocaleString()} triangles, ${shown.nv.toLocaleString()} vertices` : '') +
     (r.skipped ? `\nSkipped (geometry in BSPackedAdditionalGeometryData, not supported): ${r.skipped}` : '') +
     `\nTextures: ${list.length ? `${list.length - miss.length}/${list.length} loaded` : 'none referenced'}` +
     (miss.length ? `\nMissing: ${miss.map(e => e.name + '.dds').join(', ')}` : '') +
@@ -425,17 +975,37 @@ async function loadFiles(fl) {
   fl = [...fl]; const nf = fl.find(f => /\.nif$/i.test(f.name)), errs = [];
   for (const f of fl) if (/\.(dds|png|jpe?g|webp)$/i.test(f.name)) try { await loadTex(f); } catch (e) { errs.push(f.name + ': ' + e.message); }
   try {
-    if (nf) { cur = parseNif(await nf.arrayBuffer()); cur.fn = nf.name; setModel(cur); $('drop').classList.add('h'); }
-    else if (cur) setModel(cur, true); else throw new Error('Open a .nif file first');
-    showInfo(errs); drawUV();
+    if (nf) {
+      cur = parseNif(await nf.arrayBuffer()); cur.fn = nf.name; setModel(cur); $('drop').classList.add('h');
+      IMP.src = improverSource(cur); IMP.last = cur;
+      $('impp').style.display = 'flex';
+      syncImpControls();
+      showInfo(errs); improverStats(null);
+      if ($('impen').checked) { applyImprove(); showInfo(); }
+      drawUV();
+      return;
+    }
+    if (cur) { if (!$('impen').checked) setModel(cur, true); showInfo(errs); drawUV(); }
+    else throw new Error('Open a .nif file first');
   } catch (e) { info.textContent = 'Error: ' + e.message; console.error(e); }
 }
 $('file').onchange = e => loadFiles(e.target.files);
 $('reset').onclick = resetCam;
 $('uv').onchange = drawUV;
+
+// improver controls
+$('impen').onchange = () => { IMP.en = $('impen').checked; applyImprove(); showInfo(); drawUV(); };
+$('alg').onchange = () => { IMP.alg = $('alg').value; syncImpControls(); applyImprove(); showInfo(); };
+$('impnrm').onchange = () => { IMP.nrm = $('impnrm').value; applyImprove(); showInfo(); };
+$('lvl').oninput = () => { IMP.lvl = +$('lvl').value; $('lvlt').textContent = '×' + (4 ** IMP.lvl); scheduleImprove(); };
+$('smo').oninput = () => { IMP.smo = +$('smo').value; $('smot').textContent = IMP.smo + '%'; scheduleImprove(); };
+$('cre').oninput = () => { IMP.cre = +$('cre').value; $('crt').textContent = IMP.cre + '°'; scheduleImprove(); };
+$('impsave').onclick = exportOBJ;
+$('impstl').onclick = exportSTL;
+
 addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', n: 'nrm', f: 'flipv', u: 'uv' };
+  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', n: 'nrm', f: 'flipv', u: 'uv', i: 'impen' };
   if (map[k]) { const el = $(map[k]); el.checked = !el.checked; el.dispatchEvent(new Event('change')); }
   else if (k === 'r') resetCam();
   else if (k === 'o') $('file').click();
