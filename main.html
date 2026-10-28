@@ -48,6 +48,15 @@ canvas#cv:active{cursor:grabbing}
 #info{margin:0;padding:9px 11px;max-height:42vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:#d7d3c6}
 .uv-panel{right:12px;bottom:12px;display:none;flex-direction:column}
 #uvc{display:block;width:256px;height:256px;cursor:default;background:#222}
+.tex-panel{right:12px;top:70px;max-width:min(340px,86vw);max-height:40vh;display:none;flex-direction:column}
+#texl{list-style:none;margin:0;padding:6px;overflow:auto;font:12px/1.5 ui-monospace,monospace}
+#texl li{display:flex;gap:7px;align-items:center;padding:3px 7px;border-radius:6px;white-space:nowrap}
+#texl li.miss{background:#e06c6c1f;color:#f2a6a6}
+#texl .mdi{font-size:15px;flex:none}
+#texl .nm{overflow:hidden;text-overflow:ellipsis}
+#texl .k{margin-left:auto;padding-left:8px;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut)}
+#texl li.miss .k{color:#e06c6c}
+#texl .hint{padding:4px 7px 6px;color:var(--mut);white-space:normal;font:11px/1.45 system-ui,sans-serif}
 
 /* ---------- drop hint ---------- */
 #drop{position:fixed;inset:0;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;
@@ -71,6 +80,7 @@ canvas#cv:active{cursor:grabbing}
   <label class="chip" title="Wireframe (W)"><input id="wire" type="checkbox" checked><i class="mdi mdi-vector-line"></i><span>Wireframe</span></label>
   <label class="chip" title="Solid shading (S)"><input id="solid" type="checkbox" checked><i class="mdi mdi-cube-outline"></i><span>Solid</span></label>
   <label class="chip" title="Textures (T)"><input id="tex" type="checkbox" checked><i class="mdi mdi-texture-box"></i><span>Textures</span></label>
+  <label class="chip" title="Normal maps (N)"><input id="nrm" type="checkbox" checked><i class="mdi mdi-circle-half-full"></i><span>Normal</span></label>
   <label class="chip" title="Flip V coordinate (F)"><input id="flipv" type="checkbox"><i class="mdi mdi-flip-vertical"></i><span>Flip V</span></label>
   <label class="chip" title="UV overlay (U)"><input id="uv" type="checkbox" checked><i class="mdi mdi-grid"></i><span>UV</span></label>
   <div class="sep"></div>
@@ -84,7 +94,11 @@ canvas#cv:active{cursor:grabbing}
   <div class="ph"><i class="mdi mdi-grid"></i>UV map</div>
   <canvas id="uvc" width="256" height="256"></canvas>
 </aside>
-<div id="drop"><i class="mdi mdi-cube-outline"></i><b>Drag a .nif here</b><small>Add the .dds files too if you want textures</small><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
+<aside class="panel tex-panel" id="texp">
+  <div class="ph"><i class="mdi mdi-texture-box"></i><span id="texh">Textures</span></div>
+  <ul id="texl"></ul>
+</aside>
+<div id="drop"><i class="mdi mdi-cube-outline"></i><b>Drag a .nif here</b><small>Add the .dds files too — diffuse and _n normal maps</small><small>Fallout 3 / New Vegas (NIF 20.2.0.7)</small></div>
 
 <script>
 // ---------- NIF parser (FNV: v20.2.0.7, user 11, BS 34) ----------
@@ -179,8 +193,9 @@ function parseNif(buf) {
       V.push(P[0], P[1], P[2], nx, nz, -ny, d.uv ? d.uv[k*2] : 0, d.uv ? d.uv[k*2+1] : 0);
     }
     const pr = (b.pr || []).map(q => blocks[q]).filter(Boolean), al = pr.find(q => q.t === 'NiAlphaProperty'), sh = pr.find(q => q.ts !== undefined);
-    const tp = blocks[sh?.ts]?.tx?.[0];
-    groups.push({ s: Ix.length, c: ni.length, tex: tp ? tp.split(/[\\/]/).pop().toLowerCase().replace(/\.[^.]+$/, '') : '', ref: al ? (al.af & 0x200 ? al.thr / 255 : al.af & 1 ? 0.05 : 0) : 0 });
+    const tset = blocks[sh?.ts]?.tx || [];
+    const nm = p => p ? p.split(/[\\/]/).pop().toLowerCase().replace(/\.[^.]+$/, '') : '';
+    groups.push({ s: Ix.length, c: ni.length, tex: nm(tset[0]), ntex: nm(tset[1]), ref: al ? (al.af & 0x200 ? al.thr / 255 : al.af & 1 ? 0.05 : 0) : 0 });
     for (const j of ni) Ix.push(j + base);
     base += nv; tris += ni.length / 3;
   }
@@ -205,19 +220,36 @@ const M = {
 // ---------- WebGPU ----------
 const WGSL = `
 struct U { vp: mat4x4f, light: vec4f, opt: vec4f };
-struct Mt { cut: f32, on: f32 };
+struct Mt { cut: f32, on: f32, hasN: f32, pad: f32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var tx: texture_2d<f32>;
 @group(1) @binding(1) var sm: sampler;
 @group(1) @binding(2) var<uniform> mt: Mt;
-struct VO { @builtin(position) p: vec4f, @location(0) n: vec3f, @location(1) uv: vec2f };
+@group(1) @binding(3) var nt: texture_2d<f32>;
+struct VO { @builtin(position) p: vec4f, @location(0) n: vec3f, @location(1) uv: vec2f, @location(2) wp: vec3f };
 @vertex fn vs(@location(0) pos: vec3f, @location(1) nrm: vec3f, @location(2) uv: vec2f) -> VO {
-  var o: VO; o.p = u.vp * vec4f(pos, 1.0); o.n = nrm; o.uv = uv; return o; }
+  var o: VO; o.p = u.vp * vec4f(pos, 1.0); o.n = nrm; o.uv = uv; o.wp = pos; return o; }
+// Tangent frame rebuilt from screen-space derivatives, so it follows the UV flip toggle.
+fn cotangent(n: vec3f, p: vec3f, uv: vec2f) -> mat3x3f {
+  let dp1 = dpdx(p); let dp2 = dpdy(p);
+  let du1 = dpdx(uv); let du2 = dpdy(uv);
+  let p2 = cross(dp2, n); let p1 = cross(n, dp1);
+  let T = p2 * du1.x + p1 * du2.x;
+  let B = p2 * du1.y + p1 * du2.y;
+  let s = inverseSqrt(max(max(dot(T, T), dot(B, B)), 1e-12));
+  return mat3x3f(T * s, B * s, n);
+}
 @fragment fn fs_solid(i: VO, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
+  let uv = vec2f(i.uv.x, select(i.uv.y, 1.0 - i.uv.y, u.opt.x > 0.5));
   var n = normalize(i.n); if (!ff) { n = -n; }
-  let t = textureSample(tx, sm, vec2f(i.uv.x, select(i.uv.y, 1.0 - i.uv.y, u.opt.x > 0.5)));
+  let t = textureSample(tx, sm, uv);
   var base = vec3f(0.78, 0.74, 0.66);
   if (mt.on > 0.5 && u.light.w > 0.5) { if (t.a < mt.cut) { discard; } base = t.rgb; }
+  if (mt.hasN > 0.5 && u.opt.y > 0.5) {
+    // Bethesda/FNV normal maps use the DirectX convention (green = +V), matching this frame.
+    let nm = textureSample(nt, sm, uv).xyz * 2.0 - 1.0;
+    n = normalize(cotangent(n, i.wp, uv) * nm);
+  }
   let d = max(dot(n, u.light.xyz), 0.0);
   let hemi = 0.5 + 0.5 * n.y;
   return vec4f(base * (0.18 + 0.25 * hemi + 0.7 * d), 1.0); }
@@ -225,7 +257,7 @@ struct VO { @builtin(position) p: vec4f, @location(0) n: vec3f, @location(1) uv:
 `;
 const $ = id => document.getElementById(id);
 const cv = $('cv'), info = $('info');
-let dev, ctx, fmt, depth, ubuf, bind, pSolid, pWire, bgl1, samp, white, geo = null;
+let dev, ctx, fmt, depth, ubuf, bind, pSolid, pWire, bgl1, samp, white, flatN, geo = null;
 const cam = { yaw: 0.6, pitch: 0.35, dist: 3, target: [0,0,0], rad: 1 };
 
 async function initGPU() {
@@ -237,7 +269,7 @@ async function initGPU() {
   const mod = dev.createShaderModule({ code: WGSL });
   const bgl = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }] });
   bind = dev.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: ubuf } }] });
-  bgl1 = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} }] });
+  bgl1 = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} }, { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} }, { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} }] });
   samp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
   const layout = dev.createPipelineLayout({ bindGroupLayouts: [bgl] }), layoutS = dev.createPipelineLayout({ bindGroupLayouts: [bgl, bgl1] });
   const vbuf = { arrayStride: 32, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }, { shaderLocation: 2, offset: 24, format: 'float32x2' }] };
@@ -249,6 +281,7 @@ async function initGPU() {
   pSolid = mk('fs_solid', 'triangle-list', true);
   pWire = mk('fs_wire', 'line-list', false);
   white = mkTex(1, 1, new Uint8Array([255, 255, 255, 255]));
+  flatN = mkTex(1, 1, new Uint8Array([128, 128, 255, 255]));
   new ResizeObserver(resize).observe(cv); resize();
 }
 function resize() {
@@ -295,9 +328,9 @@ async function loadTex(f) {
   const key = f.name.toLowerCase().replace(/\.[^.]+$/, ''); lib.set(key, t); imgs.set(key, tc);
 }
 function mkGroup(g) {
-  const t = lib.get(g.tex), ub = dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  dev.queue.writeBuffer(ub, 0, new Float32Array([g.ref, t ? 1 : 0, 0, 0]));
-  return { s: g.s, c: g.c, bg: dev.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: (t || white).createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: ub } }] }) };
+  const t = lib.get(g.tex), nt = lib.get(g.ntex) || (g.tex ? lib.get(g.tex + '_n') : undefined), ub = dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  dev.queue.writeBuffer(ub, 0, new Float32Array([g.ref, t ? 1 : 0, nt ? 1 : 0, 0]));
+  return { s: g.s, c: g.c, bg: dev.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: (t || white).createView() }, { binding: 1, resource: samp }, { binding: 2, resource: { buffer: ub } }, { binding: 3, resource: (nt || flatN).createView() }] }) };
 }
 function setModel(r, keep) {
   geo?.vb.destroy(); geo?.ib.destroy(); geo?.lb.destroy();
@@ -318,7 +351,7 @@ function frame() {
     const eye = cam.target.map((t, i) => t + dir[i] * cam.dist);
     const vp = M.mul(M.persp(Math.PI / 4, asp, cam.rad * 0.01, cam.rad * 50), M.look(eye, cam.target, [0, 1, 0]));
     const ld = [dir[0] + 0.3, dir[1] + 0.5, dir[2] + 0.2], ll = Math.hypot(...ld);
-    dev.queue.writeBuffer(ubuf, 0, vp); dev.queue.writeBuffer(ubuf, 64, new Float32Array([ld[0]/ll, ld[1]/ll, ld[2]/ll, $('tex').checked ? 1 : 0])); dev.queue.writeBuffer(ubuf, 80, new Float32Array([$('flipv').checked ? 1 : 0, 0, 0, 0]));
+    dev.queue.writeBuffer(ubuf, 0, vp); dev.queue.writeBuffer(ubuf, 64, new Float32Array([ld[0]/ll, ld[1]/ll, ld[2]/ll, $('tex').checked ? 1 : 0])); dev.queue.writeBuffer(ubuf, 80, new Float32Array([$('flipv').checked ? 1 : 0, $('nrm').checked ? 1 : 0, 0, 0]));
     const enc = dev.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: { r: 0.08, g: 0.09, b: 0.1, a: 1 }, loadOp: 'clear', storeOp: 'store' }],
@@ -344,13 +377,49 @@ function drawUV() {
   for (let k = 0; k < r.idx.length; k += 3) { g.beginPath(); for (let j = 0; j < 3; j++) { const a = r.idx[k + j] * 8 + 6, v = r.verts[a + 1], x = r.verts[a] * S, y = (fl ? 1 - v : v) * S; j ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.stroke(); }
 }
 $('flipv').onchange = drawUV;
+function texList(r) {
+  const seen = new Map();
+  const add = (n, role) => { if (!n) return; const e = seen.get(n) || { name: n, roles: new Set() }; e.roles.add(role); seen.set(n, e); };
+  for (const g of r.groups) {
+    add(g.tex, 'diffuse');
+    // Only expect a normal map when the NIF references one or the file was actually provided.
+    if (g.ntex) add(g.ntex, 'normal');
+    else if (g.tex && lib.has(g.tex + '_n')) add(g.tex + '_n', 'normal');
+  }
+  return [...seen.values()];
+}
+function renderTexPanel() {
+  const r = cur, p = $('texp'), ul = $('texl');
+  if (!r) { p.style.display = 'none'; return; }
+  const list = texList(r), miss = list.filter(e => !lib.has(e.name));
+  p.style.display = 'flex';
+  $('texh').textContent = `Textures — ${list.length - miss.length}/${list.length} loaded`;
+  ul.textContent = '';
+  for (const e of list) {
+    const ok = lib.has(e.name), li = document.createElement('li');
+    if (!ok) li.className = 'miss';
+    li.title = ok ? e.name : `Missing ${e.name}.dds — drag it into the window`;
+    const ic = document.createElement('i');
+    ic.className = 'mdi ' + (ok ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
+    const k = document.createElement('span'); k.className = 'k'; k.textContent = [...e.roles].join(' + ');
+    li.append(ic, nm, k); ul.appendChild(li);
+  }
+  if (miss.length) {
+    const li = document.createElement('li'); li.className = 'hint';
+    li.textContent = `Missing ${miss.length} file${miss.length > 1 ? 's' : ''}. Drag the .dds files (diffuse and _n normal maps) into the window to load them.`;
+    ul.appendChild(li);
+  }
+}
 function showInfo(errs = []) {
   const r = cur; if (!r) return;
-  const tn = [...new Set(r.groups.map(g => g.tex).filter(Boolean))];
+  const list = texList(r), miss = list.filter(e => !lib.has(e.name));
   info.textContent = `${r.fn}\n${r.line}\nMeshes: ${r.nm}  Vertices: ${r.nv}  Triangles: ${r.tris}` +
     (r.skipped ? `\nSkipped (geometry in BSPackedAdditionalGeometryData, not supported): ${r.skipped}` : '') +
-    '\nTextures: ' + (tn.length ? tn.map(n => n + (lib.has(n) ? ' ✓' : ' ✗')).join(', ') + (tn.some(n => !lib.has(n)) ? '  (drag the .dds files along)' : '') : 'none referenced') +
+    `\nTextures: ${list.length ? `${list.length - miss.length}/${list.length} loaded` : 'none referenced'}` +
+    (miss.length ? `\nMissing: ${miss.map(e => e.name + '.dds').join(', ')}` : '') +
     '\nBlocks: ' + Object.entries(r.counts).map(([k, v]) => `${k}×${v}`).join(', ') + (errs.length ? '\n' + errs.join('\n') : '');
+  renderTexPanel();
 }
 async function loadFiles(fl) {
   fl = [...fl]; const nf = fl.find(f => /\.nif$/i.test(f.name)), errs = [];
@@ -366,7 +435,7 @@ $('reset').onclick = resetCam;
 $('uv').onchange = drawUV;
 addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', f: 'flipv', u: 'uv' };
+  const k = e.key.toLowerCase(), map = { w: 'wire', s: 'solid', t: 'tex', n: 'nrm', f: 'flipv', u: 'uv' };
   if (map[k]) { const el = $(map[k]); el.checked = !el.checked; el.dispatchEvent(new Event('change')); }
   else if (k === 'r') resetCam();
   else if (k === 'o') $('file').click();
